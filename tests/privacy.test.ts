@@ -26,6 +26,35 @@ describe("computePrivacy", () => {
     expect(p.tier).toBe(1);
   });
 
+  test("includes capability details for silent sensors with diagnostics", () => {
+    const p = computePrivacy(
+      [presenceSensor],
+      {
+        active: new Set(["idle"]),
+        yielding: new Set<string>(),
+        diagnostics: new Map([
+          [
+            "idle",
+            {
+              reason: "permission_denied",
+              detail: "Presence sensor is not yielding.",
+              fixHint: "Grant permission.",
+            },
+          ],
+        ]),
+      },
+      { isMac: true, rawTitles: false, cameraSnapshot: false, screenSnapshot: false },
+    );
+
+    expect(p.capabilities.presence).toBe("denied");
+    expect(p.capability_details?.presence).toEqual({
+      sensor: "idle",
+      reason: "permission_denied",
+      detail: "Presence sensor is not yielding.",
+      fix_hint: "Grant permission.",
+    });
+  });
+
   test("unavailable when no sensor is active on this platform", () => {
     const p = computePrivacy(
       [screenSensor],

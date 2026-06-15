@@ -99,8 +99,23 @@ Security properties:
 ## Doctor Command
 
 `sense-mcp doctor` performs local setup checks for Node, macOS support, ffmpeg,
-Codex config, opt-in capabilities, workspace roots, and panel reachability. It
+Codex config, opt-in capabilities, workspace roots, panel reachability, and live
+sensor diagnostics. It can explain cases such as mic disabled by env, Focus mode
+bridge missing, Calendar query timeout, or ambient light not exposed by macOS. It
 does not inspect private content.
+
+## Capability Diagnostics
+
+ContextFrames may include `privacy.capability_details` for capabilities that are
+denied or unavailable. These diagnostics explain setup state; they do not expose
+raw private data.
+
+Examples:
+
+- `microphone_level`: `disabled_by_env`
+- `focus_mode`: `missing_focus_bridge`
+- `calendar`: `calendar_query_timeout`
+- `ambient_light`: `ambient_light_not_exposed`
 
 ## Optional Capabilities
 
@@ -119,6 +134,7 @@ Clients should:
 - call `get_relevant_context` before deciding whether media is needed
 - call the narrowest tool that answers the request
 - honor `minimum_tool`, `avoided_tools`, `fallbacks`, and `privacy_notes`
+- use `privacy.capability_details` to explain missing context
 - inspect `snapshot_path` before answering visual questions
 - state uncertainty for classified fields
 - avoid proactive camera or screen capture

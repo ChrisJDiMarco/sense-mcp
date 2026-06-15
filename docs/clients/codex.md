@@ -72,4 +72,6 @@ Common fixes:
 - Grant Camera permission to the app process that runs the MCP server.
 - Grant Screen Recording permission for screen snapshots.
 - Install `ffmpeg` with `brew install ffmpeg`.
-
+- Use a direct Calendar connector for account schedule data when available;
+  Sense's local Calendar sensor is a fallback and will report diagnostics if
+  macOS Calendar automation times out.

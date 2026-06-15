@@ -18,7 +18,9 @@ UI, page, or debugging state.
 Never use camera or screen tools for ordinary writing, planning, coding, or
 general personalization. If a visual tool succeeds, inspect snapshot_path or the
 returned image content before answering. If a capability is denied or unavailable,
-say what is missing and continue from non-visual context when possible.
+say what is missing and continue from non-visual context when possible. For
+schedule questions, prefer a direct calendar connector when one is available and
+Sense reports calendar unavailable.
 ```
 
 ## Good Patterns
@@ -47,4 +49,3 @@ then explain the visible error.
 - Reading private messages, credentials, or unrelated screen content.
 - Treating inferred context as certain fact.
 - Saying "I can see" when the tool only returned semantic context.
-

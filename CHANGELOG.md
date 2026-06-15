@@ -20,6 +20,17 @@ add or refine capabilities, and patch versions are reserved for compatible fixes
 - Adversarial routing fixtures for known false positives.
 - Prompt-pack routing expectations and `npm run eval:prompt-pack`.
 - Recorded router benchmark result for the 2026-06-15 prompt pack run.
+- Capability diagnostics for Calendar, mic level, Focus mode, and ambient light.
+- ContextFrame `privacy.capability_details` for denied or unavailable sensors.
+- Calendar connector fallback guidance for clients that have direct account
+  calendar connections.
+
+### Fixed
+
+- Mic level sampling now prefers a real microphone input over virtual audio
+  devices when `SENSE_MIC_DEVICE_INDEX` is unset.
+- Calendar timeouts now surface as diagnostics instead of silent missing
+  schedule context.
 
 ## [0.1.0] - 2026-06-15
 

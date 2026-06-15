@@ -146,6 +146,13 @@ export function sensePanelState(
     ...(capabilities.camera.enabled || capabilities.screen.enabled
       ? ["Restart your MCP client after changing snapshot permissions."]
       : ["Camera and screen snapshots are off. Enable only when you need explicit visual help."]),
+    ...(capabilities.mic.enabled
+      ? []
+      : ["Mic noise level is off. Enable mic only if you want ambient noise class in context."]),
+    ...(env.SENSE_FOCUS_MODE || env.SENSE_FOCUS_SHORTCUT
+      ? []
+      : ["Focus mode needs SENSE_FOCUS_MODE or a macOS Shortcut named Sense Current Focus."]),
+    "Run sense-mcp doctor for live Calendar, mic, focus, and ambient light diagnostics.",
     ...(capabilities.rawTitles.enabled
       ? ["Raw titles are on. Keep this disabled unless you truly need redacted titles."]
       : []),

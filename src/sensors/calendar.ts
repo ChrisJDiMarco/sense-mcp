@@ -1,7 +1,9 @@
-import type { Observation, Sensor } from "../types.js";
-import { isMac, run } from "./exec.js";
+import type { Observation, Sensor, SensorDiagnostic } from "../types.js";
+import { isMac, runCapture, type CommandResult } from "./exec.js";
 
 const TTL_MS = 60_000;
+const CALENDAR_TIMEOUT_MS = 8_000;
+let lastCalendarDiagnostic: SensorDiagnostic | null = null;
 
 type CalendarProbe =
   | { kind: "current"; minutes: number; title?: string }
@@ -53,6 +55,32 @@ export function parseCalendarProbe(line: string): CalendarFields | null {
 
   if (kind === "CURRENT") return classifyCalendarPressure({ kind: "current", minutes, title });
   if (kind === "UPCOMING") return classifyCalendarPressure({ kind: "upcoming", minutes, title });
+  return null;
+}
+
+export function calendarDiagnosticFromResult(result: CommandResult | null): SensorDiagnostic | null {
+  if (!result) {
+    return {
+      reason: "calendar_query_failed",
+      detail: "Calendar query did not return a result.",
+      fixHint: "Open Calendar once, then run sense-mcp doctor.",
+    };
+  }
+  if (result.timedOut) {
+    return {
+      reason: "calendar_query_timeout",
+      detail: `Calendar query exceeded ${Math.round(CALENDAR_TIMEOUT_MS / 1000)} seconds.`,
+      fixHint:
+        "Open Calendar once and check macOS Automation/Calendar permissions for the app running Sense.",
+    };
+  }
+  if (result.exitCode !== 0) {
+    return {
+      reason: "calendar_permission_or_query_error",
+      detail: result.stderr || result.errorMessage || "Calendar query failed.",
+      fixHint: "Grant Calendar/Automation access to the app running Sense, then restart the MCP client.",
+    };
+  }
   return null;
 }
 
@@ -129,11 +157,20 @@ export const calendarSensor: Sensor = {
   capability: "calendar",
   available: async () => isMac,
   async sample(): Promise<Observation[]> {
-    const out = await run("osascript", ["-e", CALENDAR_SCRIPT], 5000);
-    if (!out) return [];
+    const result = await runCapture("osascript", ["-e", CALENDAR_SCRIPT], CALENDAR_TIMEOUT_MS);
+    lastCalendarDiagnostic = calendarDiagnosticFromResult(result);
+    if (lastCalendarDiagnostic || !result?.stdout) return [];
 
-    const fields = parseCalendarProbe(out);
-    if (!fields) return [];
+    const fields = parseCalendarProbe(result.stdout);
+    if (!fields) {
+      lastCalendarDiagnostic = {
+        reason: "calendar_parse_failed",
+        detail: "Calendar query returned an unexpected response.",
+        fixHint: "Run sense-mcp doctor and report the Calendar diagnostic if this persists.",
+      };
+      return [];
+    }
+    lastCalendarDiagnostic = null;
 
     return [
       {
@@ -145,4 +182,5 @@ export const calendarSensor: Sensor = {
       },
     ];
   },
+  diagnose: () => lastCalendarDiagnostic,
 };

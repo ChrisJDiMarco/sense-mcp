@@ -360,6 +360,10 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
       relevant_domains: ["schedule", "user"],
       recommended_tools: ["get_schedule_context", "get_user_state"],
       guidance: ["Use schedule pressure and presence to size the recommendation."],
+      fallbacks: [
+        "If Sense calendar context is unavailable and the client has a direct calendar connector, use that connector for schedule timing.",
+        "If no calendar connector is available, state that schedule pressure is unknown and size the advice from user state only.",
+      ],
     });
   }
 

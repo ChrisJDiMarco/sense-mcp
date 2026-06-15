@@ -15,6 +15,9 @@ Sense is a public preview and is intentionally conservative.
 - After changing permissions or environment variables, restart the MCP client.
 - `sense-mcp doctor` can identify common setup problems, but it cannot grant
   OS permissions by itself.
+- Calendar, Focus, mic level, and ambient light now include diagnostics when
+  they do not yield, but the user may still need to grant macOS permissions or
+  configure a bridge.
 
 ## Media
 
@@ -29,7 +32,15 @@ Sense is a public preview and is intentionally conservative.
 - Active-window labels are semantic classifications, not a promise that Sense
   understood the full app content.
 - Calendar event labels are generic by default.
+- Calendar timing depends on local macOS Calendar automation. If Calendar.app
+  queries hang, Sense reports `calendar_query_timeout` instead of guessing.
+- If the AI client has a direct Google Calendar or calendar connector, prefer
+  that connector for account calendar data. Sense's local Calendar sensor is a
+  fallback local signal, not a replacement for connected account APIs.
+- Focus mode requires either `SENSE_FOCUS_MODE` or a Shortcut named
+  `Sense Current Focus` that returns text.
+- Ambient light depends on macOS exposing `AppleLMUController`; many setups do
+  not expose it, so Sense falls back to time/daylight context.
 - Workspace context is only available for configured roots.
 - Quality metadata helps clients avoid overclaiming, but clients must still
   phrase uncertain context carefully.
-

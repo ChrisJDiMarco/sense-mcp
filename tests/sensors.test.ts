@@ -3,9 +3,17 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { classifyAmbientLight, parseAmbientLight } from "../src/sensors/ambientLight.js";
-import { classifyNoise, parseVolumeDetect } from "../src/sensors/audioLevel.js";
+import {
+  classifyNoise,
+  parseAvfoundationAudioDevices,
+  parseVolumeDetect,
+} from "../src/sensors/audioLevel.js";
 import { parsePmsetBattery } from "../src/sensors/battery.js";
-import { classifyCalendarPressure, parseCalendarProbe } from "../src/sensors/calendar.js";
+import {
+  calendarDiagnosticFromResult,
+  classifyCalendarPressure,
+  parseCalendarProbe,
+} from "../src/sensors/calendar.js";
 import { parseAvfoundationDevices, persistSnapshotBuffer } from "../src/sensors/camera.js";
 import { parseDisplayCount, parseNearbyDevices } from "../src/sensors/devices.js";
 import { classifyLocation } from "../src/sensors/location.js";
@@ -30,6 +38,23 @@ describe("audio level classification", () => {
     const db = parseVolumeDetect("[Parsed_volumedetect_0] mean_volume: -31.5 dB");
     expect(db).toBe(-31.5);
     expect(classifyNoise(db)).toBe("moderate");
+  });
+
+  test("parses audio devices and classifies virtual inputs", () => {
+    expect(
+      parseAvfoundationAudioDevices(`
+[AVFoundation indev] AVFoundation video devices:
+[AVFoundation indev] [0] FaceTime HD Camera
+[AVFoundation indev] AVFoundation audio devices:
+[AVFoundation indev] [0] BoomAudio
+[AVFoundation indev] [1] BlackHole 2ch
+[AVFoundation indev] [2] MacBook Pro Microphone
+`),
+    ).toEqual([
+      { index: 0, label: "virtual_audio_device" },
+      { index: 1, label: "virtual_audio_device" },
+      { index: 2, label: "built_in_microphone" },
+    ]);
   });
 });
 
@@ -58,6 +83,17 @@ describe("calendar pressure", () => {
       meeting_state: "free",
       prep_window: "none",
     });
+  });
+
+  test("explains calendar timeouts", () => {
+    expect(
+      calendarDiagnosticFromResult({
+        stdout: "",
+        stderr: "",
+        exitCode: 1,
+        timedOut: true,
+      })?.reason,
+    ).toBe("calendar_query_timeout");
   });
 });
 

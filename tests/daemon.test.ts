@@ -51,4 +51,31 @@ describe("Daemon", () => {
     expect(status.yielding.has("ok")).toBe(true);
     d.stop();
   });
+
+  test("records diagnostics from active sensors that are not yielding", async () => {
+    const d = new Daemon(new StateStore(), [
+      sensor({
+        name: "diagnostic",
+        capability: "focus_mode",
+        sample: async () => [],
+        diagnose: () => ({
+          reason: "missing_bridge",
+          detail: "No bridge configured.",
+          fixHint: "Set an env var.",
+        }),
+      }),
+    ]);
+
+    await d.start();
+    await tick();
+
+    const status = d.status();
+    expect(status.yielding.has("diagnostic")).toBe(false);
+    expect(status.diagnostics?.get("diagnostic")).toEqual({
+      reason: "missing_bridge",
+      detail: "No bridge configured.",
+      fixHint: "Set an env var.",
+    });
+    d.stop();
+  });
 });

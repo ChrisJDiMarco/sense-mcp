@@ -1,7 +1,8 @@
-import type { Observation, Sensor } from "../types.js";
+import type { Observation, Sensor, SensorDiagnostic } from "../types.js";
 import { isMac, run } from "./exec.js";
 
 const TTL_MS = 30_000;
+let lastAmbientLightDiagnostic: SensorDiagnostic | null = null;
 
 export function parseAmbientLight(output: string): number | null {
   const match = output.match(/"?(?:ALSValue|AmbientLightSensor)"?\s*=\s*(\d+)/i);
@@ -28,10 +29,25 @@ export const ambientLightSensor: Sensor = {
   available: async () => isMac,
   async sample(): Promise<Observation[]> {
     const out = await run("ioreg", ["-r", "-c", "AppleLMUController", "-d", "1"], 3000);
-    if (!out) return [];
+    if (!out) {
+      lastAmbientLightDiagnostic = {
+        reason: "ambient_light_not_exposed",
+        detail: "macOS did not expose an AppleLMUController ambient light value.",
+        fixHint: "Use daylight_class as the fallback; some Macs or display setups do not expose room brightness.",
+      };
+      return [];
+    }
 
     const value = parseAmbientLight(out);
-    if (value === null) return [];
+    if (value === null) {
+      lastAmbientLightDiagnostic = {
+        reason: "ambient_light_parse_failed",
+        detail: "macOS returned ambient-light data in an unexpected format.",
+        fixHint: "Use daylight_class as the fallback.",
+      };
+      return [];
+    }
+    lastAmbientLightDiagnostic = null;
 
     return [
       {
@@ -46,4 +62,5 @@ export const ambientLightSensor: Sensor = {
       },
     ];
   },
+  diagnose: () => lastAmbientLightDiagnostic,
 };

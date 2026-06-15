@@ -61,6 +61,49 @@ async function panelReachable(): Promise<boolean> {
   }
 }
 
+async function withEnv<T>(env: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+async function probeSensor(
+  name: string,
+  sensor: {
+    sample: () => Promise<unknown[]>;
+    diagnose?: () => { detail: string; fixHint?: string } | null;
+  },
+): Promise<DoctorCheck> {
+  const observations = await sensor.sample();
+  const diagnostic = sensor.diagnose?.();
+  if (diagnostic || observations.length === 0) {
+    return {
+      name,
+      status: "warn",
+      detail: diagnostic?.detail ?? "not yielding observations",
+      fix: diagnostic?.fixHint,
+    };
+  }
+
+  return {
+    name,
+    status: "pass",
+    detail: "yielding observations",
+  };
+}
+
 export async function createDoctorReport(configPath = process.env.SENSE_CODEX_CONFIG || DEFAULT_CODEX_CONFIG): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
 
@@ -114,6 +157,7 @@ export async function createDoctorReport(configPath = process.env.SENSE_CODEX_CO
     name: "Mic level",
     status: env.SENSE_MIC_LEVEL === "1" ? "pass" : "warn",
     detail: env.SENSE_MIC_LEVEL === "1" ? "enabled" : "disabled",
+    fix: env.SENSE_MIC_LEVEL === "1" ? undefined : "Run sense-mcp enable mic, then restart the MCP client.",
   });
   checks.push({
     name: "Workspace roots",
@@ -129,6 +173,24 @@ export async function createDoctorReport(configPath = process.env.SENSE_CODEX_CO
     detail: panel ? "reachable at http://127.0.0.1:3777/" : "not running",
     fix: panel ? undefined : "Run sense-mcp panel --open.",
   });
+
+  if (process.platform === "darwin") {
+    await withEnv(env, async () => {
+      const { calendarSensor } = await import("./sensors/calendar.js");
+      const { audioLevelSensor } = await import("./sensors/audioLevel.js");
+      const { focusModeSensor } = await import("./sensors/focusMode.js");
+      const { ambientLightSensor } = await import("./sensors/ambientLight.js");
+
+      checks.push(await probeSensor("Calendar sensor", calendarSensor));
+
+      if (env.SENSE_MIC_LEVEL === "1") {
+        checks.push(await probeSensor("Mic level sensor", audioLevelSensor));
+      }
+
+      checks.push(await probeSensor("Focus mode sensor", focusModeSensor));
+      checks.push(await probeSensor("Ambient light sensor", ambientLightSensor));
+    });
+  }
 
   return {
     generated_at: new Date().toISOString(),

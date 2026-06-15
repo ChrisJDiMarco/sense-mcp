@@ -13,6 +13,9 @@ export interface CommandResult {
   stdout: string;
   stderr: string;
   exitCode: number | null;
+  timedOut: boolean;
+  signal?: NodeJS.Signals | null;
+  errorMessage?: string;
 }
 
 /** Run a command and return both streams, even when the process exits non-zero. */
@@ -27,6 +30,9 @@ export function runCapture(
         stdout: stdout.trim(),
         stderr: stderr.trim(),
         exitCode: typeof err?.code === "number" ? err.code : err ? 1 : 0,
+        timedOut: Boolean(err?.killed || err?.signal === "SIGTERM"),
+        signal: err?.signal,
+        errorMessage: err?.message,
       });
     });
   });

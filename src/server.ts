@@ -118,7 +118,9 @@ export function createServer(store: StateStore, getPrivacy: () => Privacy): McpS
     "get_schedule_context",
     "Get only local schedule pressure: whether the user appears to be in a " +
       "calendar event, minutes to the next event, and coarse time pressure. Event " +
-      "titles are not exposed by default.",
+      "titles are not exposed by default. If this reports calendar unavailable " +
+      "and the client has a direct calendar connector, prefer the connector for " +
+      "account calendar data.",
     {},
     async () => respond(["schedule"]),
   );

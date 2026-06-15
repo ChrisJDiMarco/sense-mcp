@@ -55,7 +55,8 @@ Sense now includes a small trust layer around the raw sensors:
 | Context quality | Marks fields as observed, classified, derived, or summary, with source and staleness. |
 | State smoothing | Adds a short in-memory stability signal so app switches do not get overread. |
 | Sensitivity labels | Flags private communication, banking, credentials, and health contexts generically. |
-| Doctor command | Checks Node, platform, ffmpeg, config, opt-ins, workspace, and panel reachability. |
+| Capability diagnostics | Explains missing Calendar, mic, focus, and ambient-light signals instead of just saying unavailable. |
+| Doctor command | Checks Node, platform, ffmpeg, config, opt-ins, workspace, panel, and live sensor diagnostics. |
 | Routing eval | Runs adversarial fixtures and the 51-prompt routing pack in `npm run check`. |
 
 ## Architecture
@@ -258,6 +259,11 @@ Every ContextFrame includes a `privacy` block with per-capability status:
 | `health-bridge` | Optional local health/wearable semantic JSON | local JSON file |
 | `weather-bridge` | Optional local weather/daylight semantic JSON | local JSON file |
 
+Calendar note: when an AI client has a direct Google Calendar or calendar
+connector, use that connector for account schedule data. Sense's Calendar sensor
+is a local fallback and reports diagnostics when macOS Calendar automation is
+slow or unavailable.
+
 ## Opt-Ins
 
 | Env var | Effect |
@@ -315,6 +321,8 @@ PASS Node.js: v22.0.0
 PASS ffmpeg: available
 WARN Camera snapshot: disabled
   Fix: Run sense-mcp enable camera or use the Sense panel.
+WARN Focus mode sensor: No SENSE_FOCUS_MODE env value and Shortcut "Sense Current Focus" did not return a mode.
+  Fix: Set SENSE_FOCUS_MODE=deep_work or create a macOS Shortcut named Sense Current Focus that returns text.
 ```
 
 ## ContextFrame Spec
@@ -330,6 +338,13 @@ Sense emits the open `context-frame/0.2` envelope:
     "capabilities": {
       "screen_activity": "granted",
       "camera_snapshot": "denied"
+    },
+    "capability_details": {
+      "focus_mode": {
+        "sensor": "focus-mode",
+        "reason": "missing_focus_bridge",
+        "detail": "No focus-mode bridge is configured."
+      }
     }
   },
   "screen": {

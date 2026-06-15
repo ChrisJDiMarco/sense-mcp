@@ -30,6 +30,8 @@ describe("sensePanelState", () => {
     expect(state.health.enabled_capabilities).toBe(3);
     expect(state.health.snapshot_count).toBe(0);
     expect(state.health.doctor_command).toBe("sense-mcp doctor");
+    expect(state.health.recommendations.join(" ")).toContain("Mic noise level is off");
+    expect(state.health.recommendations.join(" ")).toContain("Focus mode needs");
     expect(state.recent_tool_activity).toEqual([]);
   });
 

@@ -8,6 +8,19 @@ export type Stability = "stable" | "recent_transition" | "unknown";
 /** Consent status for a single capability. */
 export type CapabilityStatus = "granted" | "denied" | "unavailable";
 
+export interface CapabilityDetail {
+  sensor: string;
+  reason: string;
+  detail: string;
+  fix_hint?: string;
+}
+
+export interface SensorDiagnostic {
+  reason: string;
+  detail: string;
+  fixHint?: string;
+}
+
 /** Derived hint: what kind of help fits the moment. */
 export type AssistivePosture =
   | "available"
@@ -40,12 +53,15 @@ export interface Sensor {
   sample(): Promise<Observation[]>;
   /** Optional platform gate, checked once at startup. */
   available?(): Promise<boolean>;
+  /** Optional latest diagnostic when a sensor is active but not yielding. */
+  diagnose?(): SensorDiagnostic | null;
 }
 
 /** Consent tier + per-capability status. Required on every frame. */
 export interface Privacy {
   tier: number;
   capabilities: Record<string, CapabilityStatus>;
+  capability_details?: Record<string, CapabilityDetail>;
 }
 
 export interface ContextFrame {

@@ -118,6 +118,14 @@ Stability enum: `stable` | `recent_transition` | `unknown`.
     "camera_snapshot": "denied",
     "camera_attention": "denied",
     "raw_window_titles": "denied"
+  },
+  "capability_details": {
+    "calendar": {
+      "sensor": "calendar",
+      "reason": "calendar_query_timeout",
+      "detail": "Calendar query exceeded 8 seconds.",
+      "fix_hint": "Open Calendar once and check macOS Automation/Calendar permissions for the app running Sense."
+    }
   }
 }
 ```
@@ -127,6 +135,11 @@ Capability status enum: `granted` | `denied` | `unavailable`.
 This lets a client read `"attention": absent` correctly: at
 `camera_attention: "denied"` the right behavior is *don't ask, don't infer*,
 not "data missing, try harder."
+
+`capability_details` is optional diagnostic metadata for unavailable or denied
+capabilities. It lets clients explain missing context without guessing, for
+example `disabled_by_env`, `missing_focus_bridge`,
+`calendar_query_timeout`, or `ambient_light_not_exposed`.
 
 Confidence scores are deliberately excluded from v0.2: no current sensor
 produces calibrated confidence, and uncalibrated numbers are worse than none.

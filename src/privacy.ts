@@ -1,4 +1,4 @@
-import type { CapabilityStatus, Privacy, Sensor } from "./types.js";
+import type { CapabilityDetail, CapabilityStatus, Privacy, Sensor, SensorDiagnostic } from "./types.js";
 
 /** What the daemon knows about each sensor right now. */
 export interface SensorStatus {
@@ -6,6 +6,8 @@ export interface SensorStatus {
   active: Set<string>;
   /** Sensors that produced ≥1 observation on their latest sample. */
   yielding: Set<string>;
+  /** Latest diagnostic for active sensors that are not producing observations. */
+  diagnostics?: Map<string, SensorDiagnostic>;
 }
 
 /** Config toggles that gate higher-tier capabilities. */
@@ -59,6 +61,7 @@ export function computePrivacy(
   config: PrivacyConfig,
 ): Privacy {
   const capabilities: Record<string, CapabilityStatus> = {};
+  const capabilityDetails: Record<string, CapabilityDetail> = {};
   const capTier: Record<string, number> = {};
 
   for (const sensor of sensors) {
@@ -70,6 +73,15 @@ export function computePrivacy(
         ? "denied"
         : "unavailable";
     capabilities[sensor.capability] = mergeStatus(capabilities[sensor.capability], sensorStatus);
+    const diagnostic = status.diagnostics?.get(sensor.name);
+    if (diagnostic && sensorStatus !== "granted") {
+      capabilityDetails[sensor.capability] = {
+        sensor: sensor.name,
+        reason: diagnostic.reason,
+        detail: diagnostic.detail,
+        fix_hint: diagnostic.fixHint,
+      };
+    }
   }
 
   // Raw window titles: a Tier-3 opt-in, not its own sensor.
@@ -110,5 +122,11 @@ export function computePrivacy(
     if (value === "granted") tier = Math.max(tier, capTier[capability] ?? 0);
   }
 
-  return { tier, capabilities };
+  return {
+    tier,
+    capabilities,
+    ...(Object.keys(capabilityDetails).length > 0
+      ? { capability_details: capabilityDetails }
+      : {}),
+  };
 }
