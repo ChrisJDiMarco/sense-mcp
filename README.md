@@ -46,18 +46,32 @@ Read the full privacy contract in [docs/PRIVACY.md](./docs/PRIVACY.md).
 
 ## Architecture
 
+```text
+User asks
+  |
+  v
+AI calls get_relevant_context
+  |
+  +--> ordinary request: use semantic ContextFrame
+  |
+  +--> visual request: call one explicit snapshot tool
+          |
+          v
+      inspect private snapshot_path, then answer
+```
+
 ```mermaid
-flowchart LR
-  U["User request"] --> C["AI client<br/>Claude, Codex, Cursor, etc."]
+flowchart TD
+  U["User request"] --> C["AI client"]
   C --> R["get_relevant_context"]
   R --> F["ContextFrame<br/>semantic local state"]
   R --> T{"Visual request?"}
   T -->|"No"| A["Answer with context"]
-  T -->|"Camera"| CAM["take_camera_snapshot<br/>explicit opt-in"]
-  T -->|"Screen"| SCR["take_screen_snapshot<br/>explicit opt-in"]
+  T -->|"Camera"| CAM["take_camera_snapshot"]
+  T -->|"Screen"| SCR["take_screen_snapshot"]
   CAM --> P["private temp PNG<br/>snapshot_path"]
   SCR --> P
-  P --> A
+  P --> A["Answer after inspection"]
 
   subgraph Local machine
     S["macOS sensors"]
