@@ -16,7 +16,8 @@ MCP gave AI tools and memory. Sense gives it privacy-first local context.
 
 `sense-mcp` is a local MCP server that helps an AI client understand the user's
 current situation: active work mode, presence, time pressure, battery, device
-setup, rough environment, and optional explicit camera/screen snapshots.
+setup, rough environment, and optional explicit camera/screen snapshots. The
+server is client-agnostic MCP; the built-in sensors are macOS-first today.
 
 It is built around one constraint: **the AI should understand the moment without
 surveilling the person.**
@@ -55,7 +56,7 @@ Sense now includes a small trust layer around the raw sensors:
 | State smoothing | Adds a short in-memory stability signal so app switches do not get overread. |
 | Sensitivity labels | Flags private communication, banking, credentials, and health contexts generically. |
 | Doctor command | Checks Node, platform, ffmpeg, config, opt-ins, workspace, and panel reachability. |
-| Routing eval | Runs fixture-based routing checks in `npm run check`. |
+| Routing eval | Runs adversarial fixtures and the 51-prompt routing pack in `npm run check`. |
 
 ## Architecture
 
@@ -423,12 +424,20 @@ The eval pack checks:
 - privacy boundaries
 - permission failure handling
 
-Run the automated routing fixture check:
+Run the automated checks:
 
 ```bash
 npm run build
 npm run eval:routing
+npm run eval:prompt-pack
 ```
+
+Current recorded router score:
+
+- adversarial routing fixtures: `15/15`
+- prompt-pack routing expectations: `51/51`
+
+See [docs/evals/results/2026-06-15-router-benchmark.md](./docs/evals/results/2026-06-15-router-benchmark.md).
 
 ## Security
 

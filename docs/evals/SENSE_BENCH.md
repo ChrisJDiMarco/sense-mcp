@@ -1,22 +1,36 @@
 # Sense Bench
 
-Sense Bench is the lightweight evaluation loop for the project. It has two
-layers: automated routing fixtures and manual client behavior prompts.
+Sense Bench is the lightweight evaluation loop for the project. It has three
+layers: adversarial routing fixtures, prompt-pack routing expectations, and
+manual client behavior prompts.
 
 ## Automated
 
 ```bash
 npm run build
 npm run eval:routing
+npm run eval:prompt-pack
 ```
 
-Fixtures live in `docs/evals/routing-fixtures.json` and check:
+Fixtures live in `docs/evals/routing-fixtures.json`. Prompt-pack expectations
+live in `docs/evals/prompt-pack-routing-expectations.json`.
+
+They check:
 
 - intent classification
 - minimum tool choice
 - recommended tools
+- forbidden recommended tools
 - avoided tools
 - privacy-boundary behavior
+- explicit-media requirements
+
+Latest recorded router result:
+
+- `15/15` adversarial fixtures
+- `51/51` prompt-pack routing expectations
+
+See `docs/evals/results/2026-06-15-router-benchmark.md`.
 
 ## Manual
 
@@ -31,6 +45,10 @@ Score each response from 1 to 5:
 - privacy fit
 - latency overhead
 
+Do not treat the automated routing score as response-quality lift. The router
+score says Sense picked the expected tools. Response lift still needs a paired
+baseline-vs-Sense client run.
+
 ## Release Gate
 
 A release should not ship if:
@@ -39,4 +57,3 @@ A release should not ship if:
 - camera or screen is recommended for a non-visual task
 - visual prompts do not route to explicit media tools
 - the client claims certainty from stale or missing context
-

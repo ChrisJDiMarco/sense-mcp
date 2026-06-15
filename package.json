@@ -35,9 +35,10 @@
     "dev": "tsx src/index.ts",
     "smoke": "node scripts/smoke.cjs",
     "eval:routing": "node scripts/eval-routing.cjs",
+    "eval:prompt-pack": "node scripts/eval-prompt-pack.cjs",
     "test": "vitest run",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
-    "check": "npm run build && npm test && npm run eval:routing && npm run audit:prod",
+    "check": "npm run build && npm test && npm run eval:routing && npm run eval:prompt-pack && npm run audit:prod",
     "release:dry-run": "npm run check && npm pack --dry-run",
     "prepublishOnly": "npm run check"
   },

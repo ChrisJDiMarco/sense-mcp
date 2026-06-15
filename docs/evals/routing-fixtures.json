@@ -5,7 +5,19 @@
     "intent": "visual_appearance_check",
     "minimum_tool": "take_camera_snapshot",
     "recommended_tools": ["take_camera_snapshot"],
-    "avoided_tools": ["take_screen_snapshot"]
+    "avoided_tools": ["take_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "requires_explicit_media": true
+  },
+  {
+    "name": "hair check",
+    "prompt": "Use Sense camera if helpful: how's my hair?",
+    "intent": "visual_appearance_check",
+    "minimum_tool": "take_camera_snapshot",
+    "recommended_tools": ["take_camera_snapshot"],
+    "avoided_tools": ["take_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "requires_explicit_media": true
   },
   {
     "name": "screen debug",
@@ -13,7 +25,19 @@
     "intent": "screen_debug",
     "minimum_tool": "take_screen_snapshot",
     "recommended_tools": ["take_screen_snapshot"],
-    "avoided_tools": ["take_camera_snapshot"]
+    "avoided_tools": ["take_camera_snapshot"],
+    "forbidden_recommended_tools": ["take_camera_snapshot"],
+    "requires_explicit_media": true
+  },
+  {
+    "name": "current page readable",
+    "prompt": "Use Sense screen if helpful: is this page readable?",
+    "intent": "screen_debug",
+    "minimum_tool": "take_screen_snapshot",
+    "recommended_tools": ["take_screen_snapshot"],
+    "avoided_tools": ["take_camera_snapshot"],
+    "forbidden_recommended_tools": ["take_camera_snapshot"],
+    "requires_explicit_media": true
   },
   {
     "name": "time pressure",
@@ -21,7 +45,19 @@
     "intent": "time_pressure",
     "minimum_tool": "get_schedule_context",
     "recommended_tools": ["get_schedule_context", "get_user_state"],
-    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"]
+    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_camera_snapshot", "take_screen_snapshot"],
+    "requires_explicit_media": false
+  },
+  {
+    "name": "quick plan is time pressure",
+    "prompt": "Use Sense if helpful: give me a quick plan before my meeting.",
+    "intent": "time_pressure",
+    "minimum_tool": "get_schedule_context",
+    "recommended_tools": ["get_schedule_context", "get_user_state"],
+    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_camera_snapshot", "take_screen_snapshot"],
+    "requires_explicit_media": false
   },
   {
     "name": "writing no camera",
@@ -29,7 +65,73 @@
     "intent": "writing_or_general_help",
     "minimum_tool": "none",
     "recommended_tools": [],
-    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"]
+    "recommended_tools_exact": true,
+    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
+    "requires_explicit_media": false
+  },
+  {
+    "name": "screen redesign writing is not current screen",
+    "prompt": "write an email about the screen redesign",
+    "intent": "writing_or_general_help",
+    "minimum_tool": "none",
+    "recommended_tools": [],
+    "recommended_tools_exact": true,
+    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "requires_explicit_media": false
+  },
+  {
+    "name": "screen principles are not current screen",
+    "prompt": "what are good screen redesign principles?",
+    "intent": "no_local_context_needed",
+    "minimum_tool": "none",
+    "recommended_tools": [],
+    "recommended_tools_exact": true,
+    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "requires_explicit_media": false
+  },
+  {
+    "name": "bare quick question is not time pressure",
+    "prompt": "quick question about my code",
+    "intent": "no_local_context_needed",
+    "minimum_tool": "none",
+    "recommended_tools": [],
+    "recommended_tools_exact": true,
+    "forbidden_intents": ["time_pressure"],
+    "forbidden_recommended_tools": ["get_schedule_context", "take_camera_snapshot", "take_screen_snapshot"],
+    "requires_explicit_media": false
+  },
+  {
+    "name": "state of the union is not focus state",
+    "prompt": "what is the state of the union?",
+    "intent": "no_local_context_needed",
+    "minimum_tool": "none",
+    "recommended_tools": [],
+    "recommended_tools_exact": true,
+    "forbidden_intents": ["focus_state"],
+    "forbidden_recommended_tools": ["get_context_frame", "take_camera_snapshot", "take_screen_snapshot"],
+    "requires_explicit_media": false
+  },
+  {
+    "name": "hair article is not camera",
+    "prompt": "write a post about hair trends",
+    "intent": "writing_or_general_help",
+    "minimum_tool": "none",
+    "recommended_tools": [],
+    "recommended_tools_exact": true,
+    "forbidden_recommended_tools": ["take_camera_snapshot"],
+    "requires_explicit_media": false
+  },
+  {
+    "name": "physical desk object",
+    "prompt": "Use Sense camera if helpful: what is this thing on my desk?",
+    "intent": "visual_appearance_check",
+    "minimum_tool": "take_camera_snapshot",
+    "recommended_tools": ["take_camera_snapshot"],
+    "avoided_tools": ["take_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "requires_explicit_media": true
   },
   {
     "name": "message privacy boundary",
@@ -37,7 +139,10 @@
     "intent": "privacy_boundary",
     "minimum_tool": "none",
     "recommended_tools": [],
-    "avoided_tools": ["take_screen_snapshot"]
+    "recommended_tools_exact": true,
+    "avoided_tools": ["take_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "requires_explicit_media": false
   },
   {
     "name": "credential privacy boundary",
@@ -45,6 +150,9 @@
     "intent": "privacy_boundary",
     "minimum_tool": "none",
     "recommended_tools": [],
-    "avoided_tools": ["take_screen_snapshot"]
+    "recommended_tools_exact": true,
+    "avoided_tools": ["take_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "requires_explicit_media": false
   }
 ]

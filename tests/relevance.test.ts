@@ -28,6 +28,14 @@ describe("planRelevantContext", () => {
     expect(plan.relevant_domains).toContain("screen");
   });
 
+  test("does not screenshot non-deictic writing that mentions screen as a topic", () => {
+    const plan = planRelevantContext("write an email about the screen redesign");
+    expect(plan.intent).toBe("writing_or_general_help");
+    expect(plan.minimum_tool).toBe("none");
+    expect(plan.recommended_tools).toEqual([]);
+    expect(plan.avoided_tools).toEqual(["take_camera_snapshot", "take_screen_snapshot"]);
+  });
+
   test("routes urgency/time prompts to schedule and user state", () => {
     const plan = planRelevantContext("help me knock this out fast before my meeting");
     expect(plan.intent).toBe("time_pressure");
@@ -35,6 +43,20 @@ describe("planRelevantContext", () => {
     expect(plan.recommended_tools).toEqual(["get_schedule_context", "get_user_state"]);
     expect(plan.relevant_domains).toEqual(["schedule", "user"]);
     expect(plan.avoided_tools).toContain("take_camera_snapshot");
+  });
+
+  test("does not treat a bare quick question as time pressure", () => {
+    const plan = planRelevantContext("quick question about my code");
+    expect(plan.intent).toBe("no_local_context_needed");
+    expect(plan.minimum_tool).toBe("none");
+    expect(plan.recommended_tools).toEqual([]);
+  });
+
+  test("does not treat unrelated uses of state as focus state", () => {
+    const plan = planRelevantContext("what is the state of the union?");
+    expect(plan.intent).toBe("no_local_context_needed");
+    expect(plan.minimum_tool).toBe("none");
+    expect(plan.recommended_tools).toEqual([]);
   });
 
   test("avoids media tools when prompt asks for non-visual writing help", () => {

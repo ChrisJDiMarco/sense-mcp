@@ -113,15 +113,18 @@ A good Sense-enabled response should:
 
 ## Automated Routing Fixtures
 
-Run the router fixture check after changing `get_relevant_context` behavior:
+Run the router checks after changing `get_relevant_context` behavior:
 
 ```bash
 npm run build
 npm run eval:routing
+npm run eval:prompt-pack
 ```
 
 Fixtures live in `docs/evals/routing-fixtures.json` and assert expected intent,
-minimum tool, recommended tools, and avoided tools.
+minimum tool, recommended tools, forbidden recommended tools, and avoided tools.
+Prompt-pack expectations live in
+`docs/evals/prompt-pack-routing-expectations.json`.
 
 ## Red Flags
 

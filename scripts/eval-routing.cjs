@@ -4,11 +4,26 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
 function assertIncludes(actual, expected, label) {
-  for (const item of expected) {
+  for (const item of expected ?? []) {
     if (!actual.includes(item)) {
       throw new Error(`${label} missing ${item}`);
     }
   }
+}
+
+function assertExcludes(actual, forbidden, label) {
+  for (const item of forbidden ?? []) {
+    if (actual.includes(item)) {
+      throw new Error(`${label} unexpectedly included ${item}`);
+    }
+  }
+}
+
+function assertExactArray(actual, expected, label) {
+  if (actual.length !== expected.length) {
+    throw new Error(`${label} expected [${expected.join(", ")}], got [${actual.join(", ")}]`);
+  }
+  assertIncludes(actual, expected, label);
 }
 
 async function main() {
@@ -29,8 +44,26 @@ async function main() {
       if (plan.minimum_tool !== fixture.minimum_tool) {
         throw new Error(`minimum_tool expected ${fixture.minimum_tool}, got ${plan.minimum_tool}`);
       }
+      assertExcludes([plan.intent], fixture.forbidden_intents, "intent");
+      assertExcludes([plan.minimum_tool], fixture.forbidden_minimum_tools, "minimum_tool");
       assertIncludes(plan.recommended_tools, fixture.recommended_tools, "recommended_tools");
       assertIncludes(plan.avoided_tools, fixture.avoided_tools, "avoided_tools");
+      assertExcludes(
+        plan.recommended_tools,
+        fixture.forbidden_recommended_tools,
+        "recommended_tools",
+      );
+      if (fixture.recommended_tools_exact) {
+        assertExactArray(plan.recommended_tools, fixture.recommended_tools, "recommended_tools");
+      }
+      if (
+        typeof fixture.requires_explicit_media === "boolean" &&
+        plan.requires_explicit_media !== fixture.requires_explicit_media
+      ) {
+        throw new Error(
+          `requires_explicit_media expected ${fixture.requires_explicit_media}, got ${plan.requires_explicit_media}`,
+        );
+      }
     } catch (err) {
       failures.push({
         name: fixture.name,

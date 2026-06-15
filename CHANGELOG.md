@@ -5,6 +5,22 @@ All notable changes to sense-mcp will be documented in this file.
 This project follows semantic versioning while it is pre-1.0: minor versions may
 add or refine capabilities, and patch versions are reserved for compatible fixes.
 
+## Unreleased
+
+### Changed
+
+- Hardened relevance routing to require current/deictic screen references before
+  recommending screenshots.
+- Tightened time-pressure and focus-state matching to avoid broad keywords such
+  as bare `quick` and unrelated `state`.
+- Changed default routing for unrelated prompts to `no_local_context_needed`.
+
+### Added
+
+- Adversarial routing fixtures for known false positives.
+- Prompt-pack routing expectations and `npm run eval:prompt-pack`.
+- Recorded router benchmark result for the 2026-06-15 prompt pack run.
+
 ## [0.1.0] - 2026-06-15
 
 Initial public preview.
@@ -27,4 +43,3 @@ Initial public preview.
 - Camera and screen capture are separate explicit tools, disabled unless opted in.
 - Snapshot artifacts are temporary local files and are not persisted by Sense beyond the configured temp directory behavior.
 - The panel derives its recent tool activity from temporary snapshot files instead of writing a separate audit database.
-

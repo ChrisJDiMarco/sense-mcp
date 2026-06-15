@@ -233,7 +233,8 @@ the user has explicitly opted into event title exposure.
 Implementations MAY expose `get_relevant_context({ user_request })`. This tool
 does not capture media. It classifies the current request and returns:
 
-- `intent`: e.g. `visual_appearance_check`, `screen_debug`, `time_pressure`.
+- `intent`: e.g. `visual_appearance_check`, `screen_debug`, `time_pressure`,
+  `no_local_context_needed`.
 - `confidence`: `high` | `medium` | `low`.
 - `minimum_tool`: the smallest tool that should be sufficient, or `none`.
 - `relevant_domains`: the smallest ContextFrame domains likely needed.
