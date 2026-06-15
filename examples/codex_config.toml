@@ -1,0 +1,16 @@
+# Minimal Codex MCP config for a local source checkout.
+# Replace the path with the absolute path to your built dist/index.js.
+
+[mcp_servers.sense]
+command = "node"
+args = ["/absolute/path/to/sense-mcp/dist/index.js"]
+startup_timeout_sec = 20
+
+# Optional capabilities. Leave commented until you explicitly want them.
+#
+# [mcp_servers.sense.env]
+# SENSE_CAMERA_SNAPSHOT = "1"
+# SENSE_SCREEN_SNAPSHOT = "1"
+# SENSE_WORKSPACE_ROOTS = "/absolute/path/to/workspace"
+# SENSE_MIC_LEVEL = "1"
+# SENSE_RAW_TITLES = "1"

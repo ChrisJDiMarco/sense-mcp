@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sense": {
+      "command": "node",
+      "args": ["/absolute/path/to/sense-mcp/dist/index.js"]
+    }
+  }
+}

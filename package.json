@@ -1,0 +1,65 @@
+{
+  "name": "sense-mcp",
+  "version": "0.1.0",
+  "description": "A presence layer for AI — an MCP server that gives any AI client real-time, privacy-first awareness of the user's current context. Local-only, ephemeral, pull-based.",
+  "license": "MIT",
+  "author": "Chris DiMarco",
+  "type": "module",
+  "bin": {
+    "sense-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ChrisJDiMarco/sense-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ChrisJDiMarco/sense-mcp/issues"
+  },
+  "homepage": "https://github.com/ChrisJDiMarco/sense-mcp#readme",
+  "files": [
+    "dist",
+    "SPEC.md",
+    "README.md",
+    "LICENSE",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "scripts/smoke.cjs",
+    "docs/PRIVACY.md",
+    "docs/evals/sense-mcp-eval-prompts.md",
+    "examples"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "smoke": "node scripts/smoke.cjs",
+    "test": "vitest run",
+    "audit:prod": "npm audit --omit=dev --audit-level=moderate",
+    "check": "npm run build && npm test && npm run audit:prod",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "context",
+    "presence",
+    "ambient",
+    "sensors",
+    "claude",
+    "ai"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  }
+}
