@@ -38,6 +38,13 @@ export interface PanelState {
     background_capture: boolean;
     snapshots_temporary: boolean;
   };
+  health: {
+    enabled_capabilities: number;
+    snapshot_count: number;
+    last_snapshot_at?: string;
+    doctor_command: string;
+    recommendations: string[];
+  };
   recent_snapshots: SnapshotSummary[];
   restart_required_note: string;
 }
@@ -79,48 +86,67 @@ export function sensePanelState(
   snapshots: SnapshotSummary[] = [],
   configPath = DEFAULT_CODEX_CONFIG,
 ): PanelState {
+  const capabilities: PanelState["capabilities"] = {
+    camera: {
+      label: "Camera Snapshot",
+      enabled: boolEnv(env, "SENSE_CAMERA_SNAPSHOT"),
+      env: "SENSE_CAMERA_SNAPSHOT",
+      description: "One-off webcam snapshot for explicit visual appearance or room requests.",
+    },
+    screen: {
+      label: "Screen Snapshot",
+      enabled: boolEnv(env, "SENSE_SCREEN_SNAPSHOT"),
+      env: "SENSE_SCREEN_SNAPSHOT",
+      description: "One-off screenshot for explicit current-screen or UI/debug requests.",
+    },
+    mic: {
+      label: "Mic Level",
+      enabled: boolEnv(env, "SENSE_MIC_LEVEL"),
+      env: "SENSE_MIC_LEVEL",
+      description: "One-second audio level sampling for noise class only. No audio content.",
+    },
+    rawTitles: {
+      label: "Raw Window Titles",
+      enabled: boolEnv(env, "SENSE_RAW_TITLES"),
+      env: "SENSE_RAW_TITLES",
+      description: "Redacted active-window title. Off by default.",
+    },
+    workspace: {
+      label: "Workspace Context",
+      enabled: Boolean(env.SENSE_WORKSPACE_ROOTS),
+      env: "SENSE_WORKSPACE_ROOTS",
+      value: env.SENSE_WORKSPACE_ROOTS,
+      description: "Git branch, dirty count, scripts, and project class for configured roots.",
+    },
+  };
+  const enabledCapabilities = Object.values(capabilities).filter((capability) => capability.enabled)
+    .length;
+  const recommendations = [
+    ...(capabilities.camera.enabled || capabilities.screen.enabled
+      ? ["Restart your MCP client after changing snapshot permissions."]
+      : ["Camera and screen snapshots are off. Enable only when you need explicit visual help."]),
+    ...(capabilities.rawTitles.enabled
+      ? ["Raw titles are on. Keep this disabled unless you truly need redacted titles."]
+      : []),
+  ];
+
   return {
     generated_at: new Date().toISOString(),
     config_path: configPath,
     snapshot_dir: snapshotDir(env),
-    capabilities: {
-      camera: {
-        label: "Camera Snapshot",
-        enabled: boolEnv(env, "SENSE_CAMERA_SNAPSHOT"),
-        env: "SENSE_CAMERA_SNAPSHOT",
-        description: "One-off webcam snapshot for explicit visual appearance or room requests.",
-      },
-      screen: {
-        label: "Screen Snapshot",
-        enabled: boolEnv(env, "SENSE_SCREEN_SNAPSHOT"),
-        env: "SENSE_SCREEN_SNAPSHOT",
-        description: "One-off screenshot for explicit current-screen or UI/debug requests.",
-      },
-      mic: {
-        label: "Mic Level",
-        enabled: boolEnv(env, "SENSE_MIC_LEVEL"),
-        env: "SENSE_MIC_LEVEL",
-        description: "One-second audio level sampling for noise class only. No audio content.",
-      },
-      rawTitles: {
-        label: "Raw Window Titles",
-        enabled: boolEnv(env, "SENSE_RAW_TITLES"),
-        env: "SENSE_RAW_TITLES",
-        description: "Redacted active-window title. Off by default.",
-      },
-      workspace: {
-        label: "Workspace Context",
-        enabled: Boolean(env.SENSE_WORKSPACE_ROOTS),
-        env: "SENSE_WORKSPACE_ROOTS",
-        value: env.SENSE_WORKSPACE_ROOTS,
-        description: "Git branch, dirty count, scripts, and project class for configured roots.",
-      },
-    },
+    capabilities,
     trust: {
       local_only: true,
       pull_based: true,
       background_capture: false,
       snapshots_temporary: true,
+    },
+    health: {
+      enabled_capabilities: enabledCapabilities,
+      snapshot_count: snapshots.length,
+      last_snapshot_at: snapshots[0]?.modified_at,
+      doctor_command: "sense-mcp doctor",
+      recommendations,
     },
     recent_snapshots: snapshots,
     restart_required_note: "Restart Codex after changing permissions so the MCP server reloads env.",
@@ -212,6 +238,26 @@ function snapshotRows(state: PanelState): string {
     </div>`;
 }
 
+function healthRows(state: PanelState): string {
+  const lastSnapshot = state.health.last_snapshot_at
+    ? new Date(state.health.last_snapshot_at).toLocaleString()
+    : "None";
+  return `
+    <div class="trust">
+      <div><span>Enabled capabilities</span><strong>${state.health.enabled_capabilities}</strong></div>
+      <div><span>Recent snapshots</span><strong>${state.health.snapshot_count}</strong></div>
+      <div><span>Last snapshot</span><strong>${escapeHtml(lastSnapshot)}</strong></div>
+    </div>
+    <p class="muted" style="margin-top: 12px;">Run <code>${escapeHtml(state.health.doctor_command)}</code> for setup and permission checks.</p>
+    ${
+      state.health.recommendations.length
+        ? `<ul class="recommendations">${state.health.recommendations
+            .map((item) => `<li>${escapeHtml(item)}</li>`)
+            .join("")}</ul>`
+        : ""
+    }`;
+}
+
 export function renderPanelHtml(state: PanelState, token: string): string {
   const caps = Object.entries(state.capabilities)
     .map(([name, cap]) => capabilityCard(name as CapabilityName, cap))
@@ -259,6 +305,7 @@ export function renderPanelHtml(state: PanelState, token: string): string {
     .trust { display: grid; gap: 10px; }
     .trust div { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
     .trust strong { color: var(--text); }
+    .recommendations { margin: 12px 0 0; padding-left: 18px; color: var(--muted); line-height: 1.45; }
     .muted { color: var(--muted); }
     .snapshot-list { display: grid; gap: 10px; }
     .snapshot { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
@@ -292,6 +339,10 @@ export function renderPanelHtml(state: PanelState, token: string): string {
             <div><span>Background capture</span><strong>${state.trust.background_capture ? "Yes" : "No"}</strong></div>
             <div><span>Temporary snapshots</span><strong>${state.trust.snapshots_temporary ? "Yes" : "No"}</strong></div>
           </div>
+        </section>
+        <section class="panel" style="margin-top: 18px;">
+          <h2>Health</h2>
+          ${healthRows(state)}
         </section>
         <section class="panel" style="margin-top: 18px;">
           <h2>Recent Snapshots</h2>

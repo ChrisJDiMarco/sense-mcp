@@ -27,6 +27,9 @@ describe("sensePanelState", () => {
     expect(state.capabilities.workspace.value).toBe("/tmp/workspace");
     expect(state.trust.local_only).toBe(true);
     expect(state.trust.background_capture).toBe(false);
+    expect(state.health.enabled_capabilities).toBe(3);
+    expect(state.health.snapshot_count).toBe(0);
+    expect(state.health.doctor_command).toBe("sense-mcp doctor");
   });
 });
 
@@ -73,6 +76,8 @@ describe("renderPanelHtml", () => {
     expect(html).toContain("Screen Snapshot");
     expect(html).toContain("panel-token");
     expect(html).toContain("Restart Codex");
+    expect(html).toContain("Health");
+    expect(html).toContain("sense-mcp doctor");
   });
 
   test("renders trust model booleans without inverting background capture", () => {

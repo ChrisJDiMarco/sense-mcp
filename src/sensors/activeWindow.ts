@@ -1,6 +1,6 @@
 import type { Observation, Sensor } from "../types.js";
 import { isMac, run } from "./exec.js";
-import { classifyWindowLabel, redactTitle } from "../redact.js";
+import { classifyWindowLabel, classifyWindowSensitivity, redactTitle } from "../redact.js";
 
 const TTL_MS = 15_000;
 
@@ -67,11 +67,16 @@ export const activeWindowSensor: Sensor = {
     const activityClass = ACTIVITY_BY_APP[app] ?? "unknown";
     const title = await run("osascript", ["-e", TITLE_SCRIPT]);
 
+    const label = classifyWindowLabel(activityClass, title ?? undefined);
+    const sensitivity = classifyWindowSensitivity(label);
+
     const fields: Record<string, string> = {
       active_app: app,
       activity_class: activityClass,
-      active_window_label: classifyWindowLabel(activityClass, title ?? undefined),
+      active_window_label: label,
+      sensitivity_level: sensitivity.level,
     };
+    if (sensitivity.reason) fields.sensitivity_reason = sensitivity.reason;
     if (RAW_TITLES && title) fields.active_window_title = redactTitle(title);
 
     return [

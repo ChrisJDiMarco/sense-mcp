@@ -1,6 +1,9 @@
 /** Core types for sense-mcp. Mirrors SPEC.md (context-frame/0.2). */
 
 export type Domain = "screen" | "user" | "environment" | "schedule";
+export type FieldClassification = "observed" | "classified" | "derived" | "summary";
+export type Freshness = "empty" | "fresh" | "aging" | "stale";
+export type Stability = "stable" | "recent_transition" | "unknown";
 
 /** Consent status for a single capability. */
 export type CapabilityStatus = "granted" | "denied" | "unavailable";
@@ -51,8 +54,32 @@ export interface ContextFrame {
   staleness_ms: number;
   privacy: Privacy;
   assistive_posture: AssistivePosture;
+  quality?: ContextQuality;
   screen?: Record<string, string | number | boolean>;
   user?: Record<string, string | number | boolean>;
   environment?: Record<string, string | number | boolean>;
   schedule?: Record<string, string | number | boolean>;
+}
+
+export interface FieldQuality {
+  source: string;
+  classification: FieldClassification;
+  observed_at: string;
+  staleness_ms: number;
+}
+
+export interface DomainQuality {
+  source_sensors: string[];
+  observation_count: number;
+  staleness_ms: number;
+  freshness: Freshness;
+}
+
+export interface ContextQuality {
+  overall_freshness: Freshness;
+  domains: Partial<Record<Domain, DomainQuality>>;
+  fields: Partial<Record<Domain, Record<string, FieldQuality>>>;
+  stability: {
+    screen_activity: Stability;
+  };
 }

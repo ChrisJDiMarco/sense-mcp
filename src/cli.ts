@@ -101,6 +101,7 @@ function usage(): string {
     "Commands:",
     "  status",
     "  permissions",
+    "  doctor",
     "  panel [--open] [--port <number>]",
     "  enable <camera|screen|mic|raw-titles|workspace> [value]",
     "  disable <camera|screen|mic|raw-titles|workspace>",
@@ -127,6 +128,12 @@ export async function runCli(argv: string[]): Promise<number> {
       .then(parseSenseEnvFromToml)
       .catch(() => process.env);
     console.log(renderPermissionStatus({ ...process.env, ...codexEnv }));
+    return 0;
+  }
+
+  if (command === "doctor") {
+    const { createDoctorReport, renderDoctorReport } = await import("./doctor.js");
+    console.log(renderDoctorReport(await createDoctorReport()));
     return 0;
   }
 

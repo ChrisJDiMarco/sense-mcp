@@ -25,6 +25,7 @@ const SENSITIVE_LABELS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /bank|chase|wells\s*fargo|capital\s*one|routing|\baccount\b|statement|invoice|paypal|venmo/i, label: "banking" },
   { pattern: /password|passphrase|1password|bitwarden|lastpass|keychain|secret|api[_\s-]?key|token/i, label: "credentials" },
   { pattern: /medical|patient|diagnos|prescription|health\s*record/i, label: "health record" },
+  { pattern: /messages?|mail|inbox|slack|discord|dm\b|direct message|thread/i, label: "private communication" },
 ];
 
 /**
@@ -39,6 +40,19 @@ export function classifyWindowLabel(activityClass: string, title?: string): stri
     }
   }
   return LABEL_BY_ACTIVITY[activityClass] ?? "unknown";
+}
+
+export function classifyWindowSensitivity(label: string): {
+  level: "normal" | "medium" | "high";
+  reason?: string;
+} {
+  if (label === "banking" || label === "credentials" || label === "health record") {
+    return { level: "high", reason: "financial_or_credentials_or_health" };
+  }
+  if (label === "private communication" || label === "messaging" || label === "meeting") {
+    return { level: "medium", reason: "communication_context" };
+  }
+  return { level: "normal" };
 }
 
 /**

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { parseSenseEnvFromToml, renderPermissionStatus, setSenseEnvInToml } from "../src/cli.js";
+import { renderDoctorReport, type DoctorReport } from "../src/doctor.js";
 
 const baseToml = `model = "gpt-5.5"
 
@@ -32,6 +33,25 @@ SENSE_MIC_LEVEL = "1"
 
     const disabled = setSenseEnvInToml(enabled, "SENSE_MIC_LEVEL", null);
     expect(disabled).not.toContain("SENSE_MIC_LEVEL");
+  });
+});
+
+describe("renderDoctorReport", () => {
+  test("renders actionable setup checks", () => {
+    const report: DoctorReport = {
+      generated_at: "2026-06-15T12:00:00.000Z",
+      checks: [
+        { name: "Node.js", status: "pass", detail: "v22.0.0" },
+        { name: "ffmpeg", status: "fail", detail: "not found", fix: "Install ffmpeg with Homebrew." },
+        { name: "Camera snapshot", status: "warn", detail: "disabled" },
+      ],
+    };
+
+    const rendered = renderDoctorReport(report);
+    expect(rendered).toContain("Sense Doctor");
+    expect(rendered).toContain("PASS Node.js");
+    expect(rendered).toContain("FAIL ffmpeg");
+    expect(rendered).toContain("Fix: Install ffmpeg with Homebrew.");
   });
 });
 

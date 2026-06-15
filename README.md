@@ -44,6 +44,19 @@ AI:
 
 Read the full privacy contract in [docs/PRIVACY.md](./docs/PRIVACY.md).
 
+## Reliability Pass
+
+Sense now includes a small trust layer around the raw sensors:
+
+| Layer | What it improves |
+|---|---|
+| Smarter router | Returns intent, confidence, minimum tool, avoided tools, fallbacks, and privacy notes. |
+| Context quality | Marks fields as observed, classified, derived, or summary, with source and staleness. |
+| State smoothing | Adds a short in-memory stability signal so app switches do not get overread. |
+| Sensitivity labels | Flags private communication, banking, credentials, and health contexts generically. |
+| Doctor command | Checks Node, platform, ffmpeg, config, opt-ins, workspace, and panel reachability. |
+| Routing eval | Runs fixture-based routing checks in `npm run check`. |
+
 ## Architecture
 
 ```text
@@ -93,7 +106,7 @@ git clone https://github.com/ChrisJDiMarco/sense-mcp.git
 cd sense-mcp
 npm install
 npm run build
-npm test
+npm run check
 ```
 
 Then add `dist/index.js` to your MCP client config.
@@ -168,9 +181,10 @@ After global or npm installation:
 sense-mcp panel --open
 ```
 
-The panel shows capability state, the trust model, recent explicit snapshot
-metadata, and known Sense env toggles. It binds to `127.0.0.1`, rejects
-non-local Host headers, and requires an ephemeral token for permission changes.
+The panel shows capability state, the trust model, health checks, recent
+explicit snapshot metadata, and known Sense env toggles. It binds to
+`127.0.0.1`, rejects non-local Host headers, and requires an ephemeral token for
+permission changes.
 
 ## Tools
 
@@ -245,6 +259,7 @@ Old snapshot files in the temp directory are cleaned up on later snapshot calls.
 
 ```bash
 node dist/index.js status
+node dist/index.js doctor
 node dist/index.js panel --open
 node dist/index.js enable camera
 node dist/index.js enable screen
@@ -254,6 +269,15 @@ node dist/index.js disable mic
 ```
 
 The CLI currently edits the `sense` env block in `~/.codex/config.toml`.
+
+`doctor` gives actionable setup checks:
+
+```text
+PASS Node.js: v22.0.0
+PASS ffmpeg: available
+WARN Camera snapshot: disabled
+  Fix: Run sense-mcp enable camera or use the Sense panel.
+```
 
 ## ContextFrame Spec
 
@@ -281,7 +305,22 @@ Sense emits the open `context-frame/0.2` envelope:
   "schedule": {
     "time_pressure": "moderate"
   },
-  "assistive_posture": "do_not_interrupt"
+  "assistive_posture": "do_not_interrupt",
+  "quality": {
+    "overall_freshness": "fresh",
+    "fields": {
+      "screen": {
+        "activity_class": {
+          "source": "active-window",
+          "classification": "classified",
+          "staleness_ms": 1200
+        }
+      }
+    },
+    "stability": {
+      "screen_activity": "stable"
+    }
+  }
 }
 ```
 
@@ -333,6 +372,13 @@ The eval pack checks:
 - workspace awareness
 - privacy boundaries
 - permission failure handling
+
+Run the automated routing fixture check:
+
+```bash
+npm run build
+npm run eval:routing
+```
 
 ## Security
 

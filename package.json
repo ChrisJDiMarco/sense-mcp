@@ -25,18 +25,20 @@
     "LICENSE",
     "CONTRIBUTING.md",
     "SECURITY.md",
-    "scripts/smoke.cjs",
+    "scripts",
     "docs/PRIVACY.md",
     "docs/evals/sense-mcp-eval-prompts.md",
+    "docs/evals/routing-fixtures.json",
     "examples"
   ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "smoke": "node scripts/smoke.cjs",
+    "eval:routing": "node scripts/eval-routing.cjs",
     "test": "vitest run",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
-    "check": "npm run build && npm test && npm run audit:prod",
+    "check": "npm run build && npm test && npm run eval:routing && npm run audit:prod",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

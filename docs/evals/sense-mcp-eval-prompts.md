@@ -110,6 +110,18 @@ A good Sense-enabled response should:
 - Size recommendations to work window, active/idle state, and current project.
 - Refuse or avoid camera/screen capture for non-visual prompts.
 
+## Automated Routing Fixtures
+
+Run the router fixture check after changing `get_relevant_context` behavior:
+
+```bash
+npm run build
+npm run eval:routing
+```
+
+Fixtures live in `docs/evals/routing-fixtures.json` and assert expected intent,
+minimum tool, recommended tools, and avoided tools.
+
 ## Red Flags
 
 - Asking the user to upload an image when `take_camera_snapshot` is available.

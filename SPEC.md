@@ -49,6 +49,7 @@ image only when explicitly invoked for a current visual user request.
   "environment": { ... },
   "schedule": { ... },
   "assistive_posture": "lightly_available",
+  "quality": { ... },
   "extensions": { ... }
 }
 ```
@@ -64,7 +65,45 @@ image only when explicitly invoked for a current visual user request.
 | `environment` | object | Ambient physical context. |
 | `schedule` | object | Time pressure and calendar context. |
 | `assistive_posture` | string | Derived hint: what kind of help is appropriate right now. |
+| `quality` | object | Optional freshness, provenance, field classification, and stability metadata. |
 | `extensions` | object | Namespaced vendor/community fields (`"x-oura:readiness"`). |
+
+## `quality`
+
+```json
+{
+  "overall_freshness": "fresh",
+  "domains": {
+    "screen": {
+      "source_sensors": ["active-window"],
+      "observation_count": 1,
+      "staleness_ms": 1200,
+      "freshness": "fresh"
+    }
+  },
+  "fields": {
+    "screen": {
+      "activity_class": {
+        "source": "active-window",
+        "classification": "classified",
+        "observed_at": "2026-06-11T14:32:07.000Z",
+        "staleness_ms": 1200
+      }
+    }
+  },
+  "stability": {
+    "screen_activity": "stable"
+  }
+}
+```
+
+`quality` lets clients distinguish a directly observed field from a local
+classification or derivation, and helps them avoid overreacting to stale or
+jumpy signals.
+
+Freshness enum: `empty` | `fresh` | `aging` | `stale`.
+Field classification enum: `observed` | `classified` | `derived` | `summary`.
+Stability enum: `stable` | `recent_transition` | `unknown`.
 
 ## `privacy`
 
@@ -100,6 +139,7 @@ May be revisited when a sensor class can justify them.
   "active_app": "Figma",
   "active_window_label": "design file",
   "activity_class": "designing",
+  "sensitivity_level": "normal",
   "workspace_name": "checkout",
   "git_branch": "main",
   "git_dirty_count": 3,
@@ -123,6 +163,11 @@ titles by explicit opt-in.
 `summary` is an optional one-sentence natural-language distillation, produced
 locally. It MUST NOT include credential fields, message bodies, or other
 sensitive on-screen text.
+
+Implementations MAY include generic sensitivity fields such as
+`sensitivity_level: "medium"` and
+`sensitivity_reason: "communication_context"`. These fields MUST be generic and
+MUST NOT reveal the raw title or content that triggered the sensitivity label.
 
 ## `user`
 
@@ -189,9 +234,14 @@ Implementations MAY expose `get_relevant_context({ user_request })`. This tool
 does not capture media. It classifies the current request and returns:
 
 - `intent`: e.g. `visual_appearance_check`, `screen_debug`, `time_pressure`.
+- `confidence`: `high` | `medium` | `low`.
+- `minimum_tool`: the smallest tool that should be sufficient, or `none`.
 - `relevant_domains`: the smallest ContextFrame domains likely needed.
 - `recommended_tools`: explicit follow-up tools such as `take_camera_snapshot`
   or `take_screen_snapshot`.
+- `avoided_tools`: tools that should not be called for this request.
+- `fallbacks`: what to do if the recommended tool is denied or unavailable.
+- `privacy_notes`: constraints the client should preserve in its answer.
 - `snapshot_mode`: optional task lens for vision tools.
 - `context`: a ContextFrame filtered to the relevant domains.
 
@@ -214,7 +264,8 @@ and MUST follow these rules:
    local client to inspect pixels, provided the path is returned to the client
    and stale files are cleaned up.
 5. It SHOULD return structured metadata (`generated_at`, `device_label`,
-   `snapshot_path`, `error`) and, on success, one image content block.
+   `snapshot_path`, `error`, `fix_hint`) and, on success, one image content
+   block.
 6. It SHOULD include a mode such as `appearance_check`, `hair_check`,
    `lighting_check`, `screen_debug`, or `ui_feedback` so the client answers with
    the right level of detail.
@@ -254,10 +305,10 @@ derivations as ground truth.
 | **derived** | Computed from multiple fields by rule | `time_pressure`, `assistive_posture`, `input_cadence` | Treat as a hint; never as justification for irreversible action. |
 | **summary** | Natural-language distillation | `screen.summary` | Treat as lossy narrative, not source data. |
 
-The wire format stays flat — classification lives in this spec, not in the
-JSON. (A per-field `derived:{}` envelope was considered and rejected: it
-doubles lookup paths for every consumer to encode what a static table already
-says.)
+Implementations SHOULD expose this classification in `quality.fields` when
+available. Clients should use it to phrase claims carefully: observed fields can
+be treated as facts subject to staleness; classified and derived fields should
+be treated as hints.
 
 ## Observations (internal model)
 

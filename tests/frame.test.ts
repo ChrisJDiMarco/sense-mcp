@@ -20,6 +20,8 @@ describe("buildFrame", () => {
     expect(frame.screen).toBeUndefined();
     expect(frame.privacy).toEqual({ tier: 0, capabilities: {} });
     expect(frame.assistive_posture).toBe("unknown");
+    expect(frame.quality).toBeDefined();
+    expect(frame.quality?.overall_freshness).toBe("empty");
   });
 
   test("merges fields within a domain, later wins", () => {
@@ -33,6 +35,9 @@ describe("buildFrame", () => {
     );
     const frame = buildFrame(store, undefined, 3000);
     expect(frame.screen).toEqual({ active_app: "Slack", activity_class: "designing" });
+    expect(frame.quality?.fields.screen.active_app.source).toBe("b");
+    expect(frame.quality?.fields.screen.active_app.classification).toBe("observed");
+    expect(frame.quality?.fields.screen.activity_class.classification).toBe("classified");
   });
 
   test("staleness reflects oldest included observation", () => {
@@ -40,6 +45,8 @@ describe("buildFrame", () => {
     store.ingest([obs({ observedAt: 1000 })], 1000);
     const frame = buildFrame(store, undefined, 4000);
     expect(frame.staleness_ms).toBe(3000);
+    expect(frame.quality?.domains.screen.staleness_ms).toBe(3000);
+    expect(frame.quality?.domains.screen.freshness).toBe("fresh");
   });
 
   test("respects domain filter", () => {
@@ -58,5 +65,31 @@ describe("buildFrame", () => {
     store.ingest([obs({ ttlMs: 100 })], 1000);
     const frame = buildFrame(store, undefined, 5000);
     expect(frame.screen).toBeUndefined();
+  });
+
+  test("marks screen context as stable when recent observations agree", () => {
+    const store = new StateStore();
+    store.ingest(
+      [
+        obs({ sensor: "active-window", observedAt: 1000, fields: { active_app: "Code", activity_class: "coding" } }),
+        obs({ sensor: "active-window", observedAt: 5000, fields: { active_app: "Code", activity_class: "coding" } }),
+      ],
+      5000,
+    );
+    const frame = buildFrame(store, undefined, 6000);
+    expect(frame.quality?.stability.screen_activity).toBe("stable");
+  });
+
+  test("marks screen context as a recent transition when app changes", () => {
+    const store = new StateStore();
+    store.ingest(
+      [
+        obs({ sensor: "active-window", observedAt: 1000, fields: { active_app: "Slack", activity_class: "communicating" } }),
+        obs({ sensor: "active-window", observedAt: 5000, fields: { active_app: "Code", activity_class: "coding" } }),
+      ],
+      5000,
+    );
+    const frame = buildFrame(store, undefined, 6000);
+    expect(frame.quality?.stability.screen_activity).toBe("recent_transition");
   });
 });

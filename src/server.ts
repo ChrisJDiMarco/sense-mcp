@@ -7,6 +7,7 @@ import { buildFrame } from "./frame.js";
 import { planRelevantContext } from "./relevance.js";
 import { takeCameraSnapshot, type CameraSnapshotMode } from "./sensors/camera.js";
 import { takeScreenSnapshot, type ScreenSnapshotMode } from "./sensors/screenSnapshot.js";
+import { snapshotFailureHint } from "./snapshotAdvice.js";
 
 const cameraModeSchema = z
   .enum([
@@ -160,6 +161,7 @@ export function createServer(store: StateStore, getPrivacy: () => Privacy): McpS
         markdown_image: snapshot.markdown_image,
         size_bytes: snapshot.size_bytes,
         error: snapshot.error,
+        fix_hint: snapshot.ok ? undefined : snapshotFailureHint("camera", snapshot.error),
       };
 
       if (!snapshot.ok || !snapshot.data || !snapshot.mimeType) {
@@ -217,6 +219,7 @@ export function createServer(store: StateStore, getPrivacy: () => Privacy): McpS
         markdown_image: snapshot.markdown_image,
         size_bytes: snapshot.size_bytes,
         error: snapshot.error,
+        fix_hint: snapshot.ok ? undefined : snapshotFailureHint("screen", snapshot.error),
       };
 
       if (!snapshot.ok || !snapshot.data || !snapshot.mimeType) {

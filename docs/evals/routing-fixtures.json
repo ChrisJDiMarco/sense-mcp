@@ -1,0 +1,42 @@
+[
+  {
+    "name": "appearance check",
+    "prompt": "Use Sense camera if helpful: how do I look right now?",
+    "intent": "visual_appearance_check",
+    "minimum_tool": "take_camera_snapshot",
+    "recommended_tools": ["take_camera_snapshot"],
+    "avoided_tools": ["take_screen_snapshot"]
+  },
+  {
+    "name": "screen debug",
+    "prompt": "Use Sense screen if helpful: what is this error on my screen?",
+    "intent": "screen_debug",
+    "minimum_tool": "take_screen_snapshot",
+    "recommended_tools": ["take_screen_snapshot"],
+    "avoided_tools": ["take_camera_snapshot"]
+  },
+  {
+    "name": "time pressure",
+    "prompt": "Use Sense if helpful: give me a 10-minute plan before my next meeting.",
+    "intent": "time_pressure",
+    "minimum_tool": "get_schedule_context",
+    "recommended_tools": ["get_schedule_context", "get_user_state"],
+    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"]
+  },
+  {
+    "name": "writing no camera",
+    "prompt": "Use Sense if helpful: write this email. Do not use camera unless necessary.",
+    "intent": "writing_or_general_help",
+    "minimum_tool": "none",
+    "recommended_tools": [],
+    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"]
+  },
+  {
+    "name": "message privacy boundary",
+    "prompt": "Use Sense if helpful: read my messages on screen.",
+    "intent": "privacy_boundary",
+    "minimum_tool": "none",
+    "recommended_tools": [],
+    "avoided_tools": ["take_screen_snapshot"]
+  }
+]

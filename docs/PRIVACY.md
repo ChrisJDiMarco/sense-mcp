@@ -25,6 +25,11 @@ fields like:
 These fields are intended to help the AI choose the right level of help. They
 are not a transcript, recording, or screenshot.
 
+Each ContextFrame can also include `quality` metadata: which sensor produced a
+field, whether it was observed/classified/derived, how stale it is, and whether
+screen activity looks stable or recently changed. This helps clients avoid
+overclaiming inferred context.
+
 ## What Sense Does Not Send by Default
 
 By default, Sense does not send:
@@ -87,7 +92,14 @@ Security properties:
 - rejects non-local Host headers
 - uses an ephemeral per-process token for permission changes
 - edits only allowlisted Sense environment variables
+- shows health and recent explicit snapshot metadata
 - shows a restart notice because MCP clients usually read env at startup
+
+## Doctor Command
+
+`sense-mcp doctor` performs local setup checks for Node, macOS support, ffmpeg,
+Codex config, opt-in capabilities, workspace roots, and panel reachability. It
+does not inspect private content.
 
 ## Optional Capabilities
 
@@ -105,6 +117,7 @@ Clients should:
 
 - call `get_relevant_context` before deciding whether media is needed
 - call the narrowest tool that answers the request
+- honor `minimum_tool`, `avoided_tools`, `fallbacks`, and `privacy_notes`
 - inspect `snapshot_path` before answering visual questions
 - state uncertainty for classified fields
 - avoid proactive camera or screen capture

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { classifyWindowLabel, redactTitle } from "../src/redact.js";
+import { classifyWindowLabel, classifyWindowSensitivity, redactTitle } from "../src/redact.js";
 
 describe("classifyWindowLabel", () => {
   test("maps activity class to a privacy-safe label", () => {
@@ -11,10 +11,25 @@ describe("classifyWindowLabel", () => {
   test("sensitive titles override to a guarded label", () => {
     expect(classifyWindowLabel("browsing", "Chase — Account Summary")).toBe("banking");
     expect(classifyWindowLabel("coding", "1Password — Secrets")).toBe("credentials");
+    expect(classifyWindowLabel("communicating", "Messages with Taylor")).toBe("private communication");
   });
 
   test("unknown activity falls back to unknown", () => {
     expect(classifyWindowLabel("unknown")).toBe("unknown");
+  });
+});
+
+describe("classifyWindowSensitivity", () => {
+  test("flags sensitive labels and communication contexts", () => {
+    expect(classifyWindowSensitivity("banking")).toEqual({
+      level: "high",
+      reason: "financial_or_credentials_or_health",
+    });
+    expect(classifyWindowSensitivity("private communication")).toEqual({
+      level: "medium",
+      reason: "communication_context",
+    });
+    expect(classifyWindowSensitivity("code editor")).toEqual({ level: "normal" });
   });
 });
 
