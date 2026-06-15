@@ -31,11 +31,5 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Build
-        run: npm run build
-
-      - name: Test
-        run: npm test
-
-      - name: Production dependency audit
-        run: npm run audit:prod
+      - name: Check
+        run: npm run check

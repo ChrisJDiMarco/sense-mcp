@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Privacy contract
+    url: https://github.com/ChrisJDiMarco/sense-mcp/blob/main/docs/PRIVACY.md
+    about: Read the privacy model before proposing new sensors.
+  - name: Eval prompts
+    url: https://github.com/ChrisJDiMarco/sense-mcp/blob/main/docs/evals/sense-mcp-eval-prompts.md
+    about: Use these prompts to test client behavior.
+

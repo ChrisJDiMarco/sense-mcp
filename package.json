@@ -23,12 +23,11 @@
     "SPEC.md",
     "README.md",
     "LICENSE",
+    "CHANGELOG.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
     "scripts",
-    "docs/PRIVACY.md",
-    "docs/evals/sense-mcp-eval-prompts.md",
-    "docs/evals/routing-fixtures.json",
+    "docs",
     "examples"
   ],
   "scripts": {
@@ -39,7 +38,8 @@
     "test": "vitest run",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "check": "npm run build && npm test && npm run eval:routing && npm run audit:prod",
-    "prepublishOnly": "npm run build"
+    "release:dry-run": "npm run check && npm pack --dry-run",
+    "prepublishOnly": "npm run check"
   },
   "keywords": [
     "mcp",
@@ -48,6 +48,8 @@
     "presence",
     "ambient",
     "sensors",
+    "local-first",
+    "privacy",
     "claude",
     "ai"
   ],

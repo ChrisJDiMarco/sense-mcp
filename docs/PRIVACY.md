@@ -93,6 +93,7 @@ Security properties:
 - uses an ephemeral per-process token for permission changes
 - edits only allowlisted Sense environment variables
 - shows health and recent explicit snapshot metadata
+- derives recent explicit tool activity from temp snapshot files, not a separate log
 - shows a restart notice because MCP clients usually read env at startup
 
 ## Doctor Command

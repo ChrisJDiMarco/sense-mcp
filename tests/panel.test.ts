@@ -30,6 +30,34 @@ describe("sensePanelState", () => {
     expect(state.health.enabled_capabilities).toBe(3);
     expect(state.health.snapshot_count).toBe(0);
     expect(state.health.doctor_command).toBe("sense-mcp doctor");
+    expect(state.recent_tool_activity).toEqual([]);
+  });
+
+  test("derives recent explicit tool activity from temp snapshot metadata", () => {
+    const state = sensePanelState(
+      {},
+      [
+        {
+          name: "sense-camera-2026.png",
+          kind: "camera",
+          path: "/tmp/sense-camera-2026.png",
+          size_bytes: 2048,
+          modified_at: "2026-06-15T12:00:00.000Z",
+        },
+        {
+          name: "sense-screen-2026.png",
+          kind: "screen",
+          path: "/tmp/sense-screen-2026.png",
+          size_bytes: 4096,
+          modified_at: "2026-06-15T12:01:00.000Z",
+        },
+      ],
+    );
+
+    expect(state.recent_tool_activity).toHaveLength(2);
+    expect(state.recent_tool_activity[0].tool).toBe("take_camera_snapshot");
+    expect(state.recent_tool_activity[1].tool).toBe("take_screen_snapshot");
+    expect(state.recent_tool_activity[0].note).toContain("no extra audit database");
   });
 });
 
@@ -77,6 +105,7 @@ describe("renderPanelHtml", () => {
     expect(html).toContain("panel-token");
     expect(html).toContain("Restart Codex");
     expect(html).toContain("Health");
+    expect(html).toContain("Recent Tool Activity");
     expect(html).toContain("sense-mcp doctor");
   });
 

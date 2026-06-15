@@ -1,0 +1,39 @@
+name: Setup help
+description: Get help with MCP client config, permissions, or sensor availability
+title: "[Setup]: "
+labels: ["setup"]
+body:
+  - type: dropdown
+    id: client
+    attributes:
+      label: MCP Client
+      options:
+        - Codex
+        - Claude Desktop
+        - Claude Code
+        - Cursor
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is not working?
+      description: Describe the prompt, tool call, or permission problem.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Diagnostics
+      description: Paste `sense-mcp status` and `sense-mcp doctor` output.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I restarted the MCP client after changing config.
+        - label: I installed dependencies with `npm install` and built with `npm run build`.
+        - label: I installed `ffmpeg` if using camera or microphone features.
+

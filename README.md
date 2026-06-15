@@ -99,6 +99,10 @@ flowchart TD
 macOS is the primary supported platform today. Sensors that are unavailable on a
 machine disable themselves, so the ContextFrame degrades gracefully.
 
+See [CHANGELOG.md](./CHANGELOG.md), [ROADMAP.md](./ROADMAP.md), and
+[docs/KNOWN_LIMITATIONS.md](./docs/KNOWN_LIMITATIONS.md) for release state,
+planned work, and current boundaries.
+
 ## Quickstart
 
 ```bash
@@ -109,7 +113,35 @@ npm run build
 npm run check
 ```
 
-Then add `dist/index.js` to your MCP client config.
+Then generate an MCP client config:
+
+```bash
+node dist/index.js init --client codex --profile visual --workspace /absolute/path/to/workspace
+```
+
+Or write the Codex config directly:
+
+```bash
+node dist/index.js init --write --profile visual --workspace /absolute/path/to/workspace
+```
+
+Restart your MCP client, then verify setup:
+
+```bash
+node dist/index.js doctor
+```
+
+## Setup Profiles
+
+| Profile | Enables | Best for |
+|---|---|---|
+| `safe` | Semantic context only | Trying Sense with no explicit media |
+| `developer` | Screen snapshots | Coding and UI/debug help |
+| `visual` | Camera and screen snapshots | Appearance, desk, room, and screen questions |
+| `full` | Camera, screen, and mic level | Full local context with explicit opt-ins |
+
+Raw window titles are never enabled by a profile. Use `--raw-titles` only when
+you intentionally want redacted title exposure.
 
 ## Requirements
 
@@ -142,6 +174,7 @@ Add Sense to `claude_desktop_config.json`:
 ```
 
 See [examples/claude_desktop_config.json](./examples/claude_desktop_config.json).
+For the complete guide, see [docs/clients/claude-desktop.md](./docs/clients/claude-desktop.md).
 
 ## Configure Codex
 
@@ -164,6 +197,7 @@ SENSE_WORKSPACE_ROOTS = "/absolute/path/to/workspace"
 ```
 
 See [examples/codex_config.toml](./examples/codex_config.toml).
+For the complete guide, see [docs/clients/codex.md](./docs/clients/codex.md).
 
 Restart your MCP client after changing config.
 
@@ -182,7 +216,7 @@ sense-mcp panel --open
 ```
 
 The panel shows capability state, the trust model, health checks, recent
-explicit snapshot metadata, and known Sense env toggles. It binds to
+explicit snapshot metadata, recent explicit tool activity, and known Sense env toggles. It binds to
 `127.0.0.1`, rejects non-local Host headers, and requires an ephemeral token for
 permission changes.
 
@@ -258,6 +292,8 @@ Old snapshot files in the temp directory are cleaned up on later snapshot calls.
 ## CLI
 
 ```bash
+node dist/index.js init --help
+node dist/index.js init --write --profile visual --workspace /absolute/path/to/workspace
 node dist/index.js status
 node dist/index.js doctor
 node dist/index.js panel --open
@@ -268,7 +304,8 @@ node dist/index.js enable workspace /absolute/path/to/workspace
 node dist/index.js disable mic
 ```
 
-The CLI currently edits the `sense` env block in `~/.codex/config.toml`.
+The CLI can generate client config, write the Codex `sense` server block, and
+edit the `sense` env block in `~/.codex/config.toml`.
 
 `doctor` gives actionable setup checks:
 
@@ -325,6 +362,19 @@ Sense emits the open `context-frame/0.2` envelope:
 ```
 
 See [SPEC.md](./SPEC.md) for the full schema.
+
+## Docs
+
+| Doc | Use it for |
+|---|---|
+| [docs/clients/codex.md](./docs/clients/codex.md) | Codex setup and guidance |
+| [docs/clients/claude-desktop.md](./docs/clients/claude-desktop.md) | Claude Desktop setup |
+| [docs/clients/claude-code.md](./docs/clients/claude-code.md) | Claude Code setup notes |
+| [docs/clients/cursor.md](./docs/clients/cursor.md) | Cursor setup notes |
+| [docs/PROMPTING.md](./docs/PROMPTING.md) | Client prompting rules |
+| [docs/EXAMPLES.md](./docs/EXAMPLES.md) | Example router outputs |
+| [docs/evals/SENSE_BENCH.md](./docs/evals/SENSE_BENCH.md) | Automated and manual eval loop |
+| [docs/RELEASE.md](./docs/RELEASE.md) | Release and npm checklist |
 
 ## Writing a Sensor
 

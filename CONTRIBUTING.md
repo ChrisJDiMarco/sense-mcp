@@ -19,6 +19,12 @@ Run the full local check before opening a pull request:
 npm run check
 ```
 
+If package metadata, docs packaging, or release files changed, also run:
+
+```bash
+npm run release:dry-run
+```
+
 ## Sensor Contract
 
 Sensors should be small modules in `src/sensors/` that return observations.
@@ -62,6 +68,7 @@ Rules:
 
 - [ ] `npm run build` passes.
 - [ ] `npm test` passes.
+- [ ] `npm run eval:routing` passes.
 - [ ] `npm run audit:prod` passes.
 - [ ] New sensors or tools are documented in `README.md`.
 - [ ] Privacy changes are documented in `docs/PRIVACY.md`.

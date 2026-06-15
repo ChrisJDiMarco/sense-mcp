@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -12,9 +12,25 @@ const CAPABILITY_ENV: Record<string, string> = {
 };
 
 type EnvLike = Record<string, string | undefined>;
+type InitClient = "codex" | "claude-desktop";
+type InitProfile = "safe" | "developer" | "visual" | "full";
+
+export interface InitConfig {
+  client: InitClient;
+  profile: InitProfile;
+  write: boolean;
+  configPath: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
 
 function quoteToml(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function tomlArray(values: string[]): string {
+  return `[${values.map(quoteToml).join(", ")}]`;
 }
 
 function envSectionRange(lines: string[]): { start: number; end: number } | null {
@@ -41,14 +57,40 @@ function senseSectionInsertIndex(lines: string[]): number {
   return lines.length;
 }
 
+function serverSectionRange(lines: string[]): { start: number; end: number } | null {
+  const start = lines.findIndex((line) => line.trim() === "[mcp_servers.sense]");
+  if (start === -1) return null;
+
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^\s*\[.+]\s*$/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+function setTomlKey(section: string[], key: string, renderedValue: string): string[] {
+  const keyPattern = new RegExp(`^\\s*${key}\\s*=`);
+  const existingIndex = section.findIndex((line) => keyPattern.test(line));
+  const rendered = `${key} = ${renderedValue}`;
+  if (existingIndex === -1) return [...section, rendered];
+  return section.map((line, index) => (index === existingIndex ? rendered : line));
+}
+
 export function setSenseEnvInToml(toml: string, key: string, value: string | null): string {
   const lines = toml.split("\n");
   let range = envSectionRange(lines);
 
   if (!range && value !== null) {
     const insertAt = senseSectionInsertIndex(lines);
-    lines.splice(insertAt, 0, "", "[mcp_servers.sense.env]");
-    range = { start: insertAt + 1, end: insertAt + 2 };
+    const spacer = insertAt > 0 && lines[insertAt - 1]?.trim() === "" ? [] : [""];
+    lines.splice(insertAt, 0, ...spacer, "[mcp_servers.sense.env]");
+    range = {
+      start: insertAt + spacer.length,
+      end: insertAt + spacer.length + 1,
+    };
   }
 
   if (!range) return toml;
@@ -82,6 +124,174 @@ export function parseSenseEnvFromToml(toml: string): EnvLike {
   return env;
 }
 
+function profileEnv(profile: InitProfile): Record<string, string> {
+  if (profile === "developer") return { SENSE_SCREEN_SNAPSHOT: "1" };
+  if (profile === "visual") {
+    return { SENSE_CAMERA_SNAPSHOT: "1", SENSE_SCREEN_SNAPSHOT: "1" };
+  }
+  if (profile === "full") {
+    return {
+      SENSE_CAMERA_SNAPSHOT: "1",
+      SENSE_SCREEN_SNAPSHOT: "1",
+      SENSE_MIC_LEVEL: "1",
+    };
+  }
+  return {};
+}
+
+function defaultEntryPoint(): string {
+  return path.resolve(process.argv[1] || path.join(process.cwd(), "dist", "index.js"));
+}
+
+export function buildInitConfig(argv: string[], env: NodeJS.ProcessEnv = process.env): InitConfig {
+  let client: InitClient = "codex";
+  let profile: InitProfile = "safe";
+  let write = false;
+  let configPath = env.SENSE_CODEX_CONFIG || DEFAULT_CODEX_CONFIG;
+  let command = process.execPath;
+  let entry: string | null = defaultEntryPoint();
+  let entrySpecified = false;
+  const extraArgs: string[] = [];
+  const explicitEnv: Record<string, string> = {};
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = () => {
+      const value = argv[i + 1];
+      if (!value) throw new Error(`Missing value for ${arg}`);
+      i += 1;
+      return value;
+    };
+
+    if (arg === "--client") {
+      const value = next();
+      if (value !== "codex" && value !== "claude-desktop") {
+        throw new Error("--client must be codex or claude-desktop");
+      }
+      client = value;
+    } else if (arg === "--profile") {
+      const value = next();
+      if (value !== "safe" && value !== "developer" && value !== "visual" && value !== "full") {
+        throw new Error("--profile must be safe, developer, visual, or full");
+      }
+      profile = value;
+    } else if (arg === "--write") {
+      write = true;
+    } else if (arg === "--config") {
+      configPath = path.resolve(next());
+    } else if (arg === "--command") {
+      command = next();
+      if (!entrySpecified) entry = null;
+    } else if (arg === "--entry") {
+      entry = path.resolve(next());
+      entrySpecified = true;
+    } else if (arg === "--arg") {
+      extraArgs.push(next());
+    } else if (arg === "--enable-camera" || arg === "--camera") {
+      explicitEnv.SENSE_CAMERA_SNAPSHOT = "1";
+    } else if (arg === "--enable-screen" || arg === "--screen") {
+      explicitEnv.SENSE_SCREEN_SNAPSHOT = "1";
+    } else if (arg === "--enable-mic" || arg === "--mic") {
+      explicitEnv.SENSE_MIC_LEVEL = "1";
+    } else if (arg === "--raw-titles") {
+      explicitEnv.SENSE_RAW_TITLES = "1";
+    } else if (arg === "--workspace") {
+      explicitEnv.SENSE_WORKSPACE_ROOTS = path.resolve(next());
+    } else if (arg === "--snapshot-dir") {
+      explicitEnv.SENSE_SNAPSHOT_DIR = path.resolve(next());
+    } else {
+      throw new Error(`Unknown init option: ${arg}`);
+    }
+  }
+
+  return {
+    client,
+    profile,
+    write,
+    configPath,
+    command,
+    args: entry ? [entry, ...extraArgs] : extraArgs,
+    env: { ...profileEnv(profile), ...explicitEnv },
+  };
+}
+
+export function renderCodexInitBlock(config: InitConfig): string {
+  const lines = [
+    "[mcp_servers.sense]",
+    `command = ${quoteToml(config.command)}`,
+    `args = ${tomlArray(config.args)}`,
+    "startup_timeout_sec = 20",
+  ];
+
+  const envEntries = Object.entries(config.env);
+  if (envEntries.length > 0) {
+    lines.push("", "[mcp_servers.sense.env]");
+    for (const [key, value] of envEntries) lines.push(`${key} = ${quoteToml(value)}`);
+  }
+
+  return lines.join("\n");
+}
+
+export function renderClaudeDesktopInitConfig(config: InitConfig): string {
+  const server: { command: string; args: string[]; env?: Record<string, string> } = {
+    command: config.command,
+    args: config.args,
+  };
+  if (Object.keys(config.env).length > 0) server.env = config.env;
+
+  return JSON.stringify({ mcpServers: { sense: server } }, null, 2);
+}
+
+export function upsertCodexSenseServer(toml: string, config: InitConfig): string {
+  const lines = toml ? toml.trimEnd().split("\n") : [];
+  const range = serverSectionRange(lines);
+
+  if (!range) {
+    if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
+    lines.push("[mcp_servers.sense]");
+    lines.push(`command = ${quoteToml(config.command)}`);
+    lines.push(`args = ${tomlArray(config.args)}`);
+    lines.push("startup_timeout_sec = 20");
+  } else {
+    const section = lines.slice(range.start + 1, range.end);
+    const updated = setTomlKey(
+      setTomlKey(setTomlKey(section, "command", quoteToml(config.command)), "args", tomlArray(config.args)),
+      "startup_timeout_sec",
+      "20",
+    );
+    lines.splice(range.start + 1, range.end - range.start - 1, ...updated);
+  }
+
+  let updatedToml = `${lines.join("\n")}\n`;
+  for (const [key, value] of Object.entries(config.env)) {
+    updatedToml = setSenseEnvInToml(updatedToml, key, value);
+  }
+  return updatedToml.endsWith("\n") ? updatedToml : `${updatedToml}\n`;
+}
+
+export function renderInitPreview(config: InitConfig): string {
+  const renderedConfig =
+    config.client === "codex" ? renderCodexInitBlock(config) : renderClaudeDesktopInitConfig(config);
+  const target =
+    config.client === "codex"
+      ? config.configPath
+      : "Claude Desktop settings -> claude_desktop_config.json";
+
+  return [
+    `Sense init (${config.client}, ${config.profile} profile)`,
+    `target: ${target}`,
+    "",
+    renderedConfig,
+    "",
+    "Next:",
+    config.client === "codex"
+      ? "1. Add this block to your Codex config, or rerun with --write."
+      : "1. Merge this JSON into your Claude Desktop config.",
+    "2. Restart your MCP client.",
+    "3. Run sense-mcp doctor.",
+  ].join("\n");
+}
+
 export function renderPermissionStatus(env: EnvLike = process.env): string {
   const state = (name: string) => (env[CAPABILITY_ENV[name]] === "1" ? "enabled" : "disabled");
   return [
@@ -99,6 +309,7 @@ function usage(): string {
     "sense-mcp <command>",
     "",
     "Commands:",
+    "  init [--write] [--client codex|claude-desktop] [--profile safe|developer|visual|full]",
     "  status",
     "  permissions",
     "  doctor",
@@ -108,10 +319,64 @@ function usage(): string {
   ].join("\n");
 }
 
+function initUsage(): string {
+  return [
+    "sense-mcp init [options]",
+    "",
+    "Options:",
+    "  --client codex|claude-desktop",
+    "  --profile safe|developer|visual|full",
+    "  --write                         Write Codex config in place",
+    "  --config <path>                  Codex config path for --write",
+    "  --entry <path>                   MCP server entry file",
+    "  --command <command>              Advanced: command to run instead of node",
+    "  --arg <value>                    Advanced: append command argument",
+    "  --camera, --enable-camera        Enable explicit camera snapshots",
+    "  --screen, --enable-screen        Enable explicit screen snapshots",
+    "  --mic, --enable-mic              Enable one-second mic level sampling",
+    "  --workspace <path>               Enable workspace context for a root",
+    "  --snapshot-dir <path>            Use a custom private snapshot directory",
+    "  --raw-titles                     Enable redacted raw window titles",
+  ].join("\n");
+}
+
 async function updateCodexConfig(key: string, value: string | null): Promise<void> {
   const configPath = process.env.SENSE_CODEX_CONFIG || DEFAULT_CODEX_CONFIG;
   const current = await readFile(configPath, "utf8");
   await writeFile(configPath, setSenseEnvInToml(current, key, value));
+}
+
+async function runInit(argv: string[]): Promise<number> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(initUsage());
+    return 0;
+  }
+
+  let config: InitConfig;
+  try {
+    config = buildInitConfig(argv);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : "Invalid init options");
+    console.error(`\n${initUsage()}`);
+    return 1;
+  }
+
+  if (config.write && config.client !== "codex") {
+    console.error("--write is currently supported for Codex config only.");
+    return 1;
+  }
+
+  if (!config.write) {
+    console.log(renderInitPreview(config));
+    return 0;
+  }
+
+  const current = await readFile(config.configPath, "utf8").catch(() => "");
+  await mkdir(path.dirname(config.configPath), { recursive: true });
+  await writeFile(config.configPath, upsertCodexSenseServer(current, config));
+  console.log(`Wrote Sense MCP config to ${config.configPath}`);
+  console.log("Restart Codex, then run sense-mcp doctor.");
+  return 0;
 }
 
 export async function runCli(argv: string[]): Promise<number> {
@@ -120,6 +385,10 @@ export async function runCli(argv: string[]): Promise<number> {
   if (!command || command === "help" || command === "--help" || command === "-h") {
     console.log(usage());
     return 0;
+  }
+
+  if (command === "init") {
+    return runInit(argv.slice(1));
   }
 
   if (command === "status" || command === "permissions") {

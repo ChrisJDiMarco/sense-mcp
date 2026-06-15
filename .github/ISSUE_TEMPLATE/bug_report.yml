@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a reproducible Sense bug
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction Steps
+      description: Include commands, prompts, and relevant MCP client behavior.
+      placeholder: |
+        1. Run ...
+        2. Ask ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: sense-mcp doctor
+      description: Paste output from `sense-mcp doctor`. Redact local paths if needed.
+      render: text
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "macOS 15.5, Node 22, Codex"
+    validations:
+      required: true
+

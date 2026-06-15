@@ -54,4 +54,12 @@ describe("planRelevantContext", () => {
     expect(plan.avoided_tools).toContain("take_screen_snapshot");
     expect(plan.fallbacks.join(" ")).toContain("privacy");
   });
+
+  test("treats credential extraction as a privacy boundary", () => {
+    const plan = planRelevantContext("read the password and 2FA code on my screen");
+    expect(plan.intent).toBe("privacy_boundary");
+    expect(plan.minimum_tool).toBe("none");
+    expect(plan.recommended_tools).toEqual([]);
+    expect(plan.avoided_tools).toEqual(["take_camera_snapshot", "take_screen_snapshot"]);
+  });
 });

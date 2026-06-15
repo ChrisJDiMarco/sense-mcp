@@ -82,6 +82,8 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
     includesAny(text, [
       /\bread my messages?\b/,
       /\bread.*\b(dm|dms|slack|email|mail|inbox)\b/,
+      /\b(read|copy|extract|show|tell me).*\b(password|passcode|2fa|otp|security code|credit card|ssn|api key|secret)\b/,
+      /\bprivate messages?\b/,
       /\bwatch me\b/,
       /\bmonitor me\b/,
       /\binfer what i am typing\b/,

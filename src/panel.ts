@@ -27,6 +27,15 @@ interface SnapshotSummary {
   modified_at: string;
 }
 
+interface ToolActivitySummary {
+  tool: "take_camera_snapshot" | "take_screen_snapshot";
+  status: "completed";
+  observed_at: string;
+  artifact_path: string;
+  size_bytes: number;
+  note: string;
+}
+
 export interface PanelState {
   generated_at: string;
   config_path: string;
@@ -45,6 +54,7 @@ export interface PanelState {
     doctor_command: string;
     recommendations: string[];
   };
+  recent_tool_activity: ToolActivitySummary[];
   recent_snapshots: SnapshotSummary[];
   restart_required_note: string;
 }
@@ -79,6 +89,17 @@ async function recentSnapshots(dir: string): Promise<SnapshotSummary[]> {
   } catch {
     return [];
   }
+}
+
+function snapshotToToolActivity(snapshot: SnapshotSummary): ToolActivitySummary {
+  return {
+    tool: snapshot.kind === "camera" ? "take_camera_snapshot" : "take_screen_snapshot",
+    status: "completed",
+    observed_at: snapshot.modified_at,
+    artifact_path: snapshot.path,
+    size_bytes: snapshot.size_bytes,
+    note: "Derived from the temporary snapshot artifact; no extra audit database is written.",
+  };
 }
 
 export function sensePanelState(
@@ -148,6 +169,7 @@ export function sensePanelState(
       doctor_command: "sense-mcp doctor",
       recommendations,
     },
+    recent_tool_activity: snapshots.map(snapshotToToolActivity),
     recent_snapshots: snapshots,
     restart_required_note: "Restart Codex after changing permissions so the MCP server reloads env.",
   };
@@ -238,6 +260,29 @@ function snapshotRows(state: PanelState): string {
     </div>`;
 }
 
+function toolActivityRows(state: PanelState): string {
+  if (state.recent_tool_activity.length === 0) {
+    return `<p class="muted">No explicit camera or screen tools have created temp artifacts yet.</p>`;
+  }
+  return `
+    <div class="activity-list">
+      ${state.recent_tool_activity
+        .map(
+          (activity) => `
+        <div class="activity">
+          <div>
+            <strong>${escapeHtml(activity.tool)}</strong>
+            <span>${escapeHtml(new Date(activity.observed_at).toLocaleString())}</span>
+          </div>
+          <code>${escapeHtml(activity.artifact_path)}</code>
+          <small>${escapeHtml(activity.status)} - ${Math.round(activity.size_bytes / 1024)} KB</small>
+          <p>${escapeHtml(activity.note)}</p>
+        </div>`,
+        )
+        .join("")}
+    </div>`;
+}
+
 function healthRows(state: PanelState): string {
   const lastSnapshot = state.health.last_snapshot_at
     ? new Date(state.health.last_snapshot_at).toLocaleString()
@@ -310,6 +355,12 @@ export function renderPanelHtml(state: PanelState, token: string): string {
     .snapshot-list { display: grid; gap: 10px; }
     .snapshot { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
     .snapshot code { overflow-wrap: anywhere; }
+    .activity-list { display: grid; gap: 10px; }
+    .activity { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+    .activity div { display: flex; justify-content: space-between; gap: 12px; }
+    .activity span, .activity small { color: var(--muted); }
+    .activity code { overflow-wrap: anywhere; }
+    .activity p { font-size: 13px; }
     .notice { margin-top: 18px; border: 1px solid #5e4d20; background: #28230f; color: var(--yellow); border-radius: 8px; padding: 14px; }
     .toast { position: fixed; right: 20px; bottom: 20px; background: #0f2719; color: var(--green); border: 1px solid #2f5f42; border-radius: 8px; padding: 12px 14px; opacity: 0; transform: translateY(8px); transition: .16s ease; }
     .toast.show { opacity: 1; transform: translateY(0); }
@@ -343,6 +394,10 @@ export function renderPanelHtml(state: PanelState, token: string): string {
         <section class="panel" style="margin-top: 18px;">
           <h2>Health</h2>
           ${healthRows(state)}
+        </section>
+        <section class="panel" style="margin-top: 18px;">
+          <h2>Recent Tool Activity</h2>
+          ${toolActivityRows(state)}
         </section>
         <section class="panel" style="margin-top: 18px;">
           <h2>Recent Snapshots</h2>

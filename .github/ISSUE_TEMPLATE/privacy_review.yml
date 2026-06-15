@@ -1,0 +1,36 @@
+name: Privacy review
+description: Ask for review of a new sensor, tool, or data field
+title: "[Privacy]: "
+labels: ["privacy"]
+body:
+  - type: textarea
+    id: change
+    attributes:
+      label: Change
+      description: What sensor, tool, field, or behavior are you proposing?
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Data Flow
+      description: What local data is accessed? What leaves the sensor? What is stored?
+    validations:
+      required: true
+  - type: textarea
+    id: safeguards
+    attributes:
+      label: Safeguards
+      description: Opt-ins, redaction, TTLs, fallbacks, and tests.
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Boundaries
+      options:
+        - label: Does not emit raw message text, credentials, keystrokes, transcripts, or private file contents by default.
+          required: true
+        - label: Fails closed when permissions are missing.
+          required: true
+

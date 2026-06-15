@@ -1,0 +1,37 @@
+name: Feature request
+description: Propose a capability or improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: User Scenario
+      description: What would a user say or do that this improves?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Behavior
+      description: Describe the smallest useful version.
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy Model
+      description: What data is observed, what is emitted, and what stays disabled by default?
+    validations:
+      required: true
+  - type: dropdown
+    id: capability
+    attributes:
+      label: Capability Tier
+      options:
+        - Tier 0 - Clock
+        - Tier 1 - Activity
+        - Tier 2 - Surroundings
+        - Tier 3 - Attention or explicit media
+        - Not sure
+
