@@ -123,7 +123,7 @@ describe("renderPanelHtml", () => {
       "panel-token",
     );
 
-    expect(html).toContain("Sense Control Panel");
+    expect(html).toContain("Sense Settings");
     expect(html).toContain("Camera Snapshot");
     expect(html).toContain("Screen Snapshot");
     expect(html).toContain("panel-token");

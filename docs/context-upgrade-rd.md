@@ -33,7 +33,8 @@ Expand `sense-mcp` from Tier-1 screen/presence/time awareness into a broader loc
 
 ## Phase 3 Requirements
 
-- Add a local status/control panel command: `sense-mcp panel`.
+- Add a local settings panel command: `sense-mcp settings --open` (`panel --open`
+  remains an alias).
 - The panel must bind to localhost only.
 - The panel must show explicit permission state for camera, screen, mic, raw titles, and workspace context.
 - The panel must show recent explicit snapshot metadata without opening or embedding private image pixels.

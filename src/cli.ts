@@ -289,6 +289,7 @@ export function renderInitPreview(config: InitConfig): string {
       : "1. Merge this JSON into your Claude Desktop config.",
     "2. Restart your MCP client.",
     "3. Run sense-mcp doctor.",
+    "4. Open settings with sense-mcp settings --open.",
   ].join("\n");
 }
 
@@ -314,6 +315,7 @@ function usage(): string {
     "  permissions",
     "  doctor",
     "  ledger",
+    "  settings [--open] [--port <number>]",
     "  panel [--open] [--port <number>]",
     "  enable <camera|screen|mic|raw-titles|workspace> [value]",
     "  disable <camera|screen|mic|raw-titles|workspace>",
@@ -376,7 +378,7 @@ async function runInit(argv: string[]): Promise<number> {
   await mkdir(path.dirname(config.configPath), { recursive: true });
   await writeFile(config.configPath, upsertCodexSenseServer(current, config));
   console.log(`Wrote Sense MCP config to ${config.configPath}`);
-  console.log("Restart Codex, then run sense-mcp doctor.");
+  console.log("Restart Codex, run sense-mcp doctor, then open settings with sense-mcp settings --open.");
   return 0;
 }
 
@@ -428,7 +430,7 @@ export async function runCli(argv: string[]): Promise<number> {
     return 0;
   }
 
-  if (command === "panel" || command === "tray") {
+  if (command === "panel" || command === "settings" || command === "tray") {
     const open = argv.includes("--open");
     const portIndex = argv.indexOf("--port");
     const port =

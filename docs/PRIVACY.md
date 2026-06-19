@@ -87,9 +87,10 @@ Snapshot files are:
 - not part of the ContextFrame
 - not written to project directories unless the user explicitly asks for that
 
-## Control Panel
+## Settings Panel
 
-`sense-mcp panel` starts a local control panel.
+`sense-mcp settings --open` starts a local settings panel. The older
+`sense-mcp panel --open` command remains as an alias.
 
 Security properties:
 

@@ -366,7 +366,7 @@ export function renderPanelHtml(state: PanelState, token: string): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Sense Control Panel</title>
+  <title>Sense Settings</title>
   <style>
     :root {
       color-scheme: dark;
@@ -424,8 +424,8 @@ export function renderPanelHtml(state: PanelState, token: string): string {
   <main>
     <header>
       <div>
-        <h1>Sense Control Panel</h1>
-        <p>Local context controls for Codex. Explicit snapshots only. No background camera or screen capture.</p>
+        <h1>Sense Settings</h1>
+        <p>Local context controls for AI clients. Explicit snapshots only. No background camera or screen capture.</p>
       </div>
       <div class="status-pill">Context Active</div>
     </header>

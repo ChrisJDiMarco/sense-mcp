@@ -42,5 +42,5 @@ Restart Claude Desktop after editing config.
 
 ```bash
 sense-mcp ledger
-sense-mcp panel --open
+sense-mcp settings --open
 ```

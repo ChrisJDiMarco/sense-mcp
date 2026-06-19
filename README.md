@@ -142,6 +142,13 @@ Restart your MCP client, then verify setup:
 node dist/index.js doctor
 ```
 
+Open the local settings panel to review permissions, toggle camera/screen/mic
+and workspace context, and inspect the privacy ledger:
+
+```bash
+node dist/index.js settings --open
+```
+
 ## Setup Profiles
 
 | Profile | Enables | Best for |
@@ -212,21 +219,22 @@ For the complete guide, see [docs/clients/codex.md](./docs/clients/codex.md).
 
 Restart your MCP client after changing config.
 
-## Control Panel
+## Settings Panel
 
-Sense includes a localhost-only control panel:
+Sense includes a localhost-only settings panel:
 
 ```bash
-node dist/index.js panel --open
+node dist/index.js settings --open
 ```
 
 After global or npm installation:
 
 ```bash
-sense-mcp panel --open
+sense-mcp settings --open
 ```
 
-The panel shows capability state, the trust model, health checks, the privacy
+The old `panel --open` command still works as an alias. The settings panel
+shows capability state, the trust model, health checks, the privacy
 ledger, recent explicit snapshot metadata, recent explicit tool activity, and
 known Sense env toggles. It binds to `127.0.0.1`, rejects non-local Host
 headers, and requires an ephemeral token for permission changes.
@@ -313,7 +321,7 @@ node dist/index.js init --write --profile visual --workspace /absolute/path/to/w
 node dist/index.js status
 node dist/index.js doctor
 node dist/index.js ledger
-node dist/index.js panel --open
+node dist/index.js settings --open
 node dist/index.js enable camera
 node dist/index.js enable screen
 node dist/index.js enable mic

@@ -145,19 +145,19 @@ export async function createDoctorReport(configPath = process.env.SENSE_CODEX_CO
     name: "Camera snapshot",
     status: env.SENSE_CAMERA_SNAPSHOT === "1" ? "pass" : "warn",
     detail: env.SENSE_CAMERA_SNAPSHOT === "1" ? "enabled" : "disabled",
-    fix: env.SENSE_CAMERA_SNAPSHOT === "1" ? undefined : "Run sense-mcp enable camera or use the Sense panel.",
+    fix: env.SENSE_CAMERA_SNAPSHOT === "1" ? undefined : "Run sense-mcp settings --open and enable Camera Snapshot.",
   });
   checks.push({
     name: "Screen snapshot",
     status: env.SENSE_SCREEN_SNAPSHOT === "1" ? "pass" : "warn",
     detail: env.SENSE_SCREEN_SNAPSHOT === "1" ? "enabled" : "disabled",
-    fix: env.SENSE_SCREEN_SNAPSHOT === "1" ? undefined : "Run sense-mcp enable screen or use the Sense panel.",
+    fix: env.SENSE_SCREEN_SNAPSHOT === "1" ? undefined : "Run sense-mcp settings --open and enable Screen Snapshot.",
   });
   checks.push({
     name: "Mic level",
     status: env.SENSE_MIC_LEVEL === "1" ? "pass" : "warn",
     detail: env.SENSE_MIC_LEVEL === "1" ? "enabled" : "disabled",
-    fix: env.SENSE_MIC_LEVEL === "1" ? undefined : "Run sense-mcp enable mic, then restart the MCP client.",
+    fix: env.SENSE_MIC_LEVEL === "1" ? undefined : "Run sense-mcp settings --open and enable Mic Level, then restart the MCP client.",
   });
   checks.push({
     name: "Workspace roots",
@@ -168,10 +168,10 @@ export async function createDoctorReport(configPath = process.env.SENSE_CODEX_CO
 
   const panel = await panelReachable();
   checks.push({
-    name: "Control panel",
+    name: "Settings panel",
     status: panel ? "pass" : "warn",
     detail: panel ? "reachable at http://127.0.0.1:3777/" : "not running",
-    fix: panel ? undefined : "Run sense-mcp panel --open.",
+    fix: panel ? undefined : "Run sense-mcp settings --open to open the local settings panel.",
   });
 
   if (process.platform === "darwin") {

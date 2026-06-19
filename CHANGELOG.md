@@ -17,6 +17,8 @@ add or refine capabilities, and patch versions are reserved for compatible fixes
 
 ### Added
 
+- `sense-mcp settings --open` as a clearer alias for the local settings panel,
+  plus first-run and doctor guidance that points users to it.
 - Context broker metadata on `get_relevant_context`: expected value, token
   budget, plan-only behavior, included/excluded context, and external connector
   hints.

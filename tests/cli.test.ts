@@ -150,5 +150,6 @@ describe("sense-mcp init helpers", () => {
     const preview = renderInitPreview(config);
     expect(preview).toContain("Sense init (codex, developer profile)");
     expect(preview).toContain("Run sense-mcp doctor");
+    expect(preview).toContain("sense-mcp settings --open");
   });
 });

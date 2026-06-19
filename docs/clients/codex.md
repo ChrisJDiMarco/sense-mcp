@@ -65,7 +65,7 @@ for ordinary writing, planning, or coding prompts.
 sense-mcp status
 sense-mcp doctor
 sense-mcp ledger
-sense-mcp panel --open
+sense-mcp settings --open
 ```
 
 Common fixes:
