@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./docs/assets/sense-mcp-header.png" alt="Sense MCP abstract header showing a privacy shield inside a local context field around a laptop" width="100%" />
+<img src="./docs/assets/sense-mcp-header-cinematic.png" alt="Sense MCP cinematic header showing a privacy shield inside a local context field around a developer workstation" width="100%" />
 
 # sense-mcp
 
