@@ -10,7 +10,7 @@ add or refine capabilities, and patch versions are reserved for compatible fixes
 ### Changed
 
 - Refreshed the GitHub README with a stronger project narrative, clearer
-  onboarding flow, and new header artwork.
+  onboarding flow, and a generated cinematic header image.
 - Hardened relevance routing to require current/deictic screen references before
   recommending screenshots.
 - Tightened time-pressure and focus-state matching to avoid broad keywords such
