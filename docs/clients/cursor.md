@@ -37,3 +37,5 @@ node dist/index.js init --client claude-desktop --profile developer --workspace 
 The generated JSON is not Cursor-specific, but the server shape is the same:
 `command`, `args`, and optional `env`.
 
+Client guidance should start with `get_relevant_context` and honor
+`context_plan.plan_only` so ordinary prompts do not spend local context.

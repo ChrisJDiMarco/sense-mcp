@@ -4,6 +4,7 @@ export type Domain = "screen" | "user" | "environment" | "schedule";
 export type FieldClassification = "observed" | "classified" | "derived" | "summary";
 export type Freshness = "empty" | "fresh" | "aging" | "stale";
 export type Stability = "stable" | "recent_transition" | "unknown";
+export type SituationConfidence = "high" | "medium" | "low" | "unknown";
 
 /** Consent status for a single capability. */
 export type CapabilityStatus = "granted" | "denied" | "unavailable";
@@ -38,6 +39,13 @@ export interface Observation {
   ttlMs: number;
 }
 
+export interface TimelineEvent {
+  observedAt: number;
+  domain: Domain;
+  sensor: string;
+  label: string;
+}
+
 /** The plugin interface. Implement this, register it, done. */
 export interface Sensor {
   name: string;
@@ -70,11 +78,22 @@ export interface ContextFrame {
   staleness_ms: number;
   privacy: Privacy;
   assistive_posture: AssistivePosture;
+  situation?: SituationSummary;
   quality?: ContextQuality;
   screen?: Record<string, string | number | boolean>;
   user?: Record<string, string | number | boolean>;
   environment?: Record<string, string | number | boolean>;
   schedule?: Record<string, string | number | boolean>;
+}
+
+export interface SituationSummary {
+  summary: string;
+  confidence: SituationConfidence;
+  evidence: string[];
+  unknowns: string[];
+  risks: string[];
+  recommendations: string[];
+  recent_changes: string[];
 }
 
 export interface FieldQuality {

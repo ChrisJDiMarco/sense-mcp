@@ -24,6 +24,24 @@ export type SnapshotMode =
   | "screen_summary"
   | "general_visual";
 
+export type ExpectedContextValue = "none" | "low" | "medium" | "high";
+export type ContextBudgetMode = "none" | "brief" | "focused" | "visual";
+
+export interface ContextPlan {
+  expected_value: ExpectedContextValue;
+  budget: {
+    mode: ContextBudgetMode;
+    max_tokens: number;
+  };
+  plan_only: boolean;
+  include_frame: boolean;
+  include_situation: boolean;
+  included_context: string[];
+  excluded_context: string[];
+  external_context_needed: string[];
+  reason: string;
+}
+
 export interface RelevantContextPlan {
   intent: RelevantIntent;
   confidence: "high" | "medium" | "low";
@@ -41,6 +59,7 @@ export interface RelevantContextPlan {
   avoided_tools: string[];
   requires_explicit_media: boolean;
   snapshot_mode?: SnapshotMode;
+  context_plan: ContextPlan;
   guidance: string[];
   fallbacks: string[];
   privacy_notes: string[];
@@ -191,16 +210,62 @@ function isExplicitContextRequest(text: string): boolean {
   ]);
 }
 
-function withDefaults(plan: Omit<RelevantContextPlan, "avoided_tools" | "fallbacks" | "privacy_notes" | "requires_explicit_media"> & {
+function withDefaults(plan: Omit<RelevantContextPlan, "avoided_tools" | "fallbacks" | "privacy_notes" | "requires_explicit_media" | "context_plan"> & {
   avoided_tools?: string[];
   fallbacks?: string[];
   privacy_notes?: string[];
   requires_explicit_media?: boolean;
+  context_plan?: Partial<ContextPlan> & {
+    budget?: Partial<ContextPlan["budget"]>;
+  };
 }): RelevantContextPlan {
   const usesCamera = plan.recommended_tools.includes("take_camera_snapshot");
   const usesScreen = plan.recommended_tools.includes("take_screen_snapshot");
+  const planOnly = plan.minimum_tool === "none";
+  const budgetMode: ContextBudgetMode = planOnly
+    ? "none"
+    : usesCamera || usesScreen
+      ? "visual"
+      : plan.minimum_tool === "get_context_frame"
+        ? "focused"
+        : "brief";
+  const maxTokens =
+    budgetMode === "none" ? 0 : budgetMode === "visual" ? 120 : budgetMode === "focused" ? 180 : 100;
+  const includedContext = [
+    ...plan.relevant_domains.map((domain) => `${domain}_domain`),
+    ...plan.recommended_tools,
+  ];
+  const excludedContext = [
+    ...(plan.relevant_domains.includes("screen") ? [] : ["screen_domain"]),
+    ...(plan.relevant_domains.includes("user") ? [] : ["user_domain"]),
+    ...(plan.relevant_domains.includes("environment") ? [] : ["environment_domain"]),
+    ...(plan.relevant_domains.includes("schedule") ? [] : ["schedule_domain"]),
+    ...(usesCamera ? [] : ["camera_snapshot"]),
+    ...(usesScreen ? [] : ["screen_snapshot"]),
+  ];
+  const contextPlan: ContextPlan = {
+    expected_value: planOnly ? "none" : usesCamera || usesScreen ? "high" : "medium",
+    plan_only: planOnly,
+    include_frame: !planOnly,
+    include_situation: !planOnly,
+    included_context: includedContext,
+    excluded_context: excludedContext,
+    external_context_needed: [],
+    reason:
+      planOnly
+        ? "Local context is unlikely to change the answer."
+        : "Local context is likely to improve the answer or avoid a clarification.",
+    ...plan.context_plan,
+    budget: {
+      mode: budgetMode,
+      max_tokens: maxTokens,
+      ...plan.context_plan?.budget,
+    },
+  };
+
   return {
     ...plan,
+    context_plan: contextPlan,
     avoided_tools:
       plan.avoided_tools ??
       [
@@ -244,6 +309,13 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
       ],
       fallbacks: ["Use privacy-preserving guidance only; do not try a different Sense tool to bypass the boundary."],
       privacy_notes: ["Message contents, keystrokes, and background monitoring are outside the Sense privacy model."],
+      context_plan: {
+        expected_value: "none",
+        plan_only: true,
+        include_frame: false,
+        include_situation: false,
+        reason: "The request crosses a privacy boundary, so Sense should not collect local context.",
+      },
     });
   }
 
@@ -261,6 +333,13 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
       guidance: ["Do not use camera or screen tools for this writing request unless the user changes the request."],
       fallbacks: ["Proceed from the text the user supplied and ask for pasted context only if needed."],
       privacy_notes: ["The user explicitly constrained media use; honor that constraint."],
+      context_plan: {
+        expected_value: "none",
+        plan_only: true,
+        include_frame: false,
+        include_situation: false,
+        reason: "The user asked for writing help and explicitly constrained media use.",
+      },
     });
   }
 
@@ -289,6 +368,14 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
         "If capture is denied, point to macOS Camera privacy permissions.",
       ],
       privacy_notes: ["explicit camera use is justified only because this is a current visual appearance request."],
+      context_plan: {
+        expected_value: "high",
+        budget: { mode: "visual", max_tokens: 120 },
+        include_frame: false,
+        include_situation: false,
+        included_context: ["camera_snapshot"],
+        reason: "The user asked about current visual appearance; text context cannot answer that directly.",
+      },
     });
   }
 
@@ -311,6 +398,14 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
         "If capture is denied, point to macOS Screen Recording permissions.",
       ],
       privacy_notes: ["Avoid reading private messages or secrets from the screenshot; summarize only what is needed for the request."],
+      context_plan: {
+        expected_value: "high",
+        budget: { mode: "visual", max_tokens: 120 },
+        include_frame: false,
+        include_situation: false,
+        included_context: ["screen_snapshot"],
+        reason: "The user referenced current visible screen content.",
+      },
     });
   }
 
@@ -324,6 +419,14 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
       snapshot_mode: "desk_check",
       guidance: ["Use camera only if the user is referring to the physical room or desk."],
       privacy_notes: ["Camera use is only appropriate if the referent is physical, not on-screen/private content."],
+      context_plan: {
+        expected_value: "high",
+        budget: { mode: "visual", max_tokens: 120 },
+        include_frame: false,
+        include_situation: false,
+        included_context: ["camera_snapshot"],
+        reason: "The user referred to a physical object or room context.",
+      },
     });
   }
 
@@ -349,6 +452,11 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
       relevant_domains: ["environment"],
       recommended_tools: ["get_environment_context"],
       guidance: ["Use ambient context only; avoid snapshots unless explicitly visual."],
+      context_plan: {
+        expected_value: "medium",
+        budget: { mode: "brief", max_tokens: 100 },
+        reason: "Ambient context can answer the request without visual capture.",
+      },
     });
   }
 
@@ -364,6 +472,12 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
         "If Sense calendar context is unavailable and the client has a direct calendar connector, use that connector for schedule timing.",
         "If no calendar connector is available, state that schedule pressure is unknown and size the advice from user state only.",
       ],
+      context_plan: {
+        expected_value: "high",
+        budget: { mode: "focused", max_tokens: 140 },
+        external_context_needed: ["calendar_connector"],
+        reason: "Schedule timing can change the recommendation; account calendar data may need a connector.",
+      },
     });
   }
 
@@ -375,6 +489,11 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
       relevant_domains: ["screen", "user", "schedule"],
       recommended_tools: ["get_context_frame"],
       guidance: ["Use active app, workspace state, and schedule pressure."],
+      context_plan: {
+        expected_value: "high",
+        budget: { mode: "focused", max_tokens: 180 },
+        reason: "The user is asking about current work state, so local workspace and activity context can change the answer.",
+      },
     });
   }
 
@@ -386,6 +505,11 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
       relevant_domains: ["user", "environment", "schedule"],
       recommended_tools: ["get_context_frame"],
       guidance: ["Use user state, environment, and schedule pressure."],
+      context_plan: {
+        expected_value: "medium",
+        budget: { mode: "focused", max_tokens: 160 },
+        reason: "The user is asking about focus or availability, which depends on local state.",
+      },
     });
   }
 
@@ -399,6 +523,13 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
       guidance: ["Do not use Sense tools for ordinary writing unless the user references current local context."],
       fallbacks: ["Proceed from the text the user supplied and ask for pasted context only if needed."],
       privacy_notes: ["No current local context was required for this writing request."],
+      context_plan: {
+        expected_value: "none",
+        plan_only: true,
+        include_frame: false,
+        include_situation: false,
+        reason: "Ordinary writing help does not need local context.",
+      },
     });
   }
 
@@ -410,6 +541,11 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
       relevant_domains: ["screen", "user", "environment", "schedule"],
       recommended_tools: ["get_context_frame"],
       guidance: ["Use semantic context only; avoid camera and screen snapshots unless separately justified."],
+      context_plan: {
+        expected_value: "medium",
+        budget: { mode: "focused", max_tokens: 220 },
+        reason: "The user explicitly asked what local context is available.",
+      },
     });
   }
 
@@ -422,5 +558,12 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
     guidance: ["No local Sense context is needed for this request."],
     fallbacks: ["Answer normally without calling additional Sense tools."],
     privacy_notes: ["Avoid collecting local context when the request is not about the user's current situation."],
+    context_plan: {
+      expected_value: "none",
+      plan_only: true,
+      include_frame: false,
+      include_situation: false,
+      reason: "The request is not about the current local situation.",
+    },
   });
 }

@@ -10,6 +10,7 @@ import type {
 } from "./types.js";
 import { StateStore } from "./state.js";
 import { derivePosture } from "./posture.js";
+import { deriveSituation } from "./situation.js";
 
 const DOMAINS: Domain[] = ["screen", "user", "environment", "schedule"];
 const TIER_ZERO: Privacy = { tier: 0, capabilities: {} };
@@ -148,5 +149,6 @@ export function buildFrame(
   frame.staleness_ms = now - oldest;
   quality.overall_freshness = freshnessFor(frame.staleness_ms, included === 0);
   frame.assistive_posture = derivePosture(frame);
+  frame.situation = deriveSituation(frame, store.timeline(now));
   return frame;
 }

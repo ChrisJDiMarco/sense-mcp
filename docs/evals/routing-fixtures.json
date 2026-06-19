@@ -7,7 +7,13 @@
     "recommended_tools": ["take_camera_snapshot"],
     "avoided_tools": ["take_screen_snapshot"],
     "forbidden_recommended_tools": ["take_screen_snapshot"],
-    "requires_explicit_media": true
+    "requires_explicit_media": true,
+    "context_plan": {
+      "expected_value": "high",
+      "budget_mode": "visual",
+      "include_frame": false,
+      "included_context": ["camera_snapshot"]
+    }
   },
   {
     "name": "hair check",
@@ -47,7 +53,12 @@
     "recommended_tools": ["get_schedule_context", "get_user_state"],
     "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
     "forbidden_recommended_tools": ["take_camera_snapshot", "take_screen_snapshot"],
-    "requires_explicit_media": false
+    "requires_explicit_media": false,
+    "context_plan": {
+      "expected_value": "high",
+      "budget_mode": "focused",
+      "external_context_needed": ["calendar_connector"]
+    }
   },
   {
     "name": "quick plan is time pressure",
@@ -67,7 +78,12 @@
     "recommended_tools": [],
     "recommended_tools_exact": true,
     "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
-    "requires_explicit_media": false
+    "requires_explicit_media": false,
+    "context_plan": {
+      "expected_value": "none",
+      "plan_only": true,
+      "include_frame": false
+    }
   },
   {
     "name": "screen redesign writing is not current screen",
@@ -100,7 +116,12 @@
     "recommended_tools_exact": true,
     "forbidden_intents": ["time_pressure"],
     "forbidden_recommended_tools": ["get_schedule_context", "take_camera_snapshot", "take_screen_snapshot"],
-    "requires_explicit_media": false
+    "requires_explicit_media": false,
+    "context_plan": {
+      "expected_value": "none",
+      "plan_only": true,
+      "include_frame": false
+    }
   },
   {
     "name": "state of the union is not focus state",
@@ -111,7 +132,12 @@
     "recommended_tools_exact": true,
     "forbidden_intents": ["focus_state"],
     "forbidden_recommended_tools": ["get_context_frame", "take_camera_snapshot", "take_screen_snapshot"],
-    "requires_explicit_media": false
+    "requires_explicit_media": false,
+    "context_plan": {
+      "expected_value": "none",
+      "plan_only": true,
+      "include_frame": false
+    }
   },
   {
     "name": "hair article is not camera",

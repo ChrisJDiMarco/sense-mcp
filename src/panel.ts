@@ -4,6 +4,7 @@ import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseSenseEnvFromToml, setSenseEnvInToml } from "./cli.js";
+import { ledgerPath, readAccessLedger, type AccessLedgerEntry } from "./ledger.js";
 
 const DEFAULT_CODEX_CONFIG = path.join(os.homedir(), ".codex", "config.toml");
 const DEFAULT_PORT = 3777;
@@ -56,6 +57,10 @@ export interface PanelState {
   };
   recent_tool_activity: ToolActivitySummary[];
   recent_snapshots: SnapshotSummary[];
+  privacy_ledger: {
+    path: string;
+    entries: AccessLedgerEntry[];
+  };
   restart_required_note: string;
 }
 
@@ -106,6 +111,7 @@ export function sensePanelState(
   env: Record<string, string | undefined>,
   snapshots: SnapshotSummary[] = [],
   configPath = DEFAULT_CODEX_CONFIG,
+  ledgerEntries: AccessLedgerEntry[] = [],
 ): PanelState {
   const capabilities: PanelState["capabilities"] = {
     camera: {
@@ -178,6 +184,10 @@ export function sensePanelState(
     },
     recent_tool_activity: snapshots.map(snapshotToToolActivity),
     recent_snapshots: snapshots,
+    privacy_ledger: {
+      path: ledgerPath(),
+      entries: ledgerEntries,
+    },
     restart_required_note: "Restart Codex after changing permissions so the MCP server reloads env.",
   };
 }
@@ -288,6 +298,42 @@ function toolActivityRows(state: PanelState): string {
         )
         .join("")}
     </div>`;
+}
+
+function ledgerRows(state: PanelState): string {
+  if (state.privacy_ledger.entries.length === 0) {
+    return `<p class="muted">No Sense access ledger entries yet.</p>`;
+  }
+  return `
+    <div class="activity-list">
+      ${state.privacy_ledger.entries
+        .map((entry) => {
+          const domains = entry.context_domains.length ? entry.context_domains.join(", ") : "none";
+          const budget =
+            entry.budget_mode && entry.max_tokens !== undefined
+              ? `${entry.budget_mode}, ${entry.max_tokens} tokens`
+              : "not set";
+          const external = entry.external_context_needed?.length
+            ? `<p>External context: ${escapeHtml(entry.external_context_needed.join(", "))}</p>`
+            : "";
+          const artifacts = entry.artifact_paths?.length
+            ? `<p>Artifacts: ${escapeHtml(entry.artifact_paths.join(", "))}</p>`
+            : "";
+          return `
+        <div class="activity">
+          <div>
+            <strong>${escapeHtml(entry.tool)}</strong>
+            <span>${escapeHtml(new Date(entry.observed_at).toLocaleString())}</span>
+          </div>
+          <small>${escapeHtml(entry.status)} - media ${entry.media_captured ? "yes" : "no"} - domains ${escapeHtml(domains)} - budget ${escapeHtml(budget)}</small>
+          <p>${escapeHtml(entry.reason)}</p>
+          ${external}
+          ${artifacts}
+        </div>`;
+        })
+        .join("")}
+    </div>
+    <p class="muted" style="margin-top: 10px;">Ledger path: <code>${escapeHtml(state.privacy_ledger.path)}</code></p>`;
 }
 
 function healthRows(state: PanelState): string {
@@ -403,6 +449,10 @@ export function renderPanelHtml(state: PanelState, token: string): string {
           ${healthRows(state)}
         </section>
         <section class="panel" style="margin-top: 18px;">
+          <h2>Privacy Ledger</h2>
+          ${ledgerRows(state)}
+        </section>
+        <section class="panel" style="margin-top: 18px;">
           <h2>Recent Tool Activity</h2>
           ${toolActivityRows(state)}
         </section>
@@ -463,7 +513,7 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 async function loadPanelState(configPath: string): Promise<PanelState> {
   const toml = await readFile(configPath, "utf8");
   const env = { ...process.env, ...parseSenseEnvFromToml(toml) };
-  return sensePanelState(env, await recentSnapshots(snapshotDir(env)), configPath);
+  return sensePanelState(env, await recentSnapshots(snapshotDir(env)), configPath, await readAccessLedger(20));
 }
 
 async function updatePermission(configPath: string, input: unknown): Promise<void> {

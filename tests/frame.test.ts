@@ -22,6 +22,7 @@ describe("buildFrame", () => {
     expect(frame.assistive_posture).toBe("unknown");
     expect(frame.quality).toBeDefined();
     expect(frame.quality?.overall_freshness).toBe("empty");
+    expect(frame.situation?.confidence).toBe("unknown");
   });
 
   test("merges fields within a domain, later wins", () => {
@@ -38,6 +39,8 @@ describe("buildFrame", () => {
     expect(frame.quality?.fields.screen.active_app.source).toBe("b");
     expect(frame.quality?.fields.screen.active_app.classification).toBe("observed");
     expect(frame.quality?.fields.screen.activity_class.classification).toBe("classified");
+    expect(frame.situation?.summary).toContain("using Slack");
+    expect(frame.situation?.evidence).toContain("activity designing");
   });
 
   test("staleness reflects oldest included observation", () => {
@@ -91,5 +94,36 @@ describe("buildFrame", () => {
     );
     const frame = buildFrame(store, undefined, 6000);
     expect(frame.quality?.stability.screen_activity).toBe("recent_transition");
+  });
+
+  test("includes a compact situation card with safe recent changes", () => {
+    const store = new StateStore();
+    store.ingest(
+      [
+        obs({
+          sensor: "workspace",
+          observedAt: 1000,
+          fields: {
+            workspace_name: "sense-mcp",
+            activity_class: "coding",
+            git_branch: "main",
+            git_dirty_count: 3,
+          },
+        }),
+        obs({
+          sensor: "battery",
+          domain: "environment",
+          observedAt: 2000,
+          fields: { power_source: "ac_power", battery_percent: 94 },
+        }),
+      ],
+      2000,
+    );
+
+    const frame = buildFrame(store, undefined, 3000);
+    expect(frame.situation?.summary).toContain("working in sense-mcp");
+    expect(frame.situation?.evidence).toContain("branch main");
+    expect(frame.situation?.recent_changes.join(" ")).toContain("Working in sense-mcp");
+    expect(frame.situation?.recent_changes.join(" ")).not.toContain("active_window_title");
   });
 });

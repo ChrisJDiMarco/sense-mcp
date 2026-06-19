@@ -45,4 +45,27 @@ describe("StateStore", () => {
     expect(store.live("user", 2000)).toHaveLength(1);
     expect(store.live("screen", 2000)).toHaveLength(1);
   });
+
+  test("keeps a privacy-safe semantic timeline without raw titles", () => {
+    const store = new StateStore();
+    store.ingest(
+      [
+        obs({
+          sensor: "active-window",
+          fields: {
+            active_window_title: "Secret Project - Chris@example.com",
+            activity_class: "coding",
+            workspace_name: "sense-mcp",
+          },
+        }),
+      ],
+      1000,
+    );
+
+    const timeline = store.timeline(2000);
+    expect(timeline).toHaveLength(1);
+    expect(timeline[0].label).toBe("Working in sense-mcp (coding)");
+    expect(timeline[0].label).not.toContain("Secret Project");
+    expect(timeline[0].label).not.toContain("@");
+  });
 });

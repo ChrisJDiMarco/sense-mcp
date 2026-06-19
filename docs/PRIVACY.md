@@ -30,6 +30,11 @@ field, whether it was observed/classified/derived, how stale it is, and whether
 screen activity looks stable or recently changed. This helps clients avoid
 overclaiming inferred context.
 
+Frames may also include a compact `situation` card. This is a lossy summary of
+the same semantic frame: summary, evidence, unknowns, risks, recommendations,
+and recent safe changes. It is designed to reduce token use, not expose more
+private data.
+
 ## What Sense Does Not Send by Default
 
 By default, Sense does not send:
@@ -93,8 +98,35 @@ Security properties:
 - uses an ephemeral per-process token for permission changes
 - edits only allowlisted Sense environment variables
 - shows health and recent explicit snapshot metadata
-- derives recent explicit tool activity from temp snapshot files, not a separate log
+- shows a metadata-only privacy ledger for recent Sense tool calls
 - shows a restart notice because MCP clients usually read env at startup
+
+## Privacy Ledger
+
+Sense records a small local access ledger by default in the OS temp directory
+(`SENSE_LEDGER_PATH` can override it). The ledger is metadata only. It helps the
+user answer: what did Sense access, when, why, and did it capture media?
+
+Ledger entries can include:
+
+- tool name
+- status
+- reason, redacted and truncated
+- context domains used
+- expected context value and token budget
+- connector hints such as `calendar_connector`
+- local artifact paths for explicit snapshots
+
+Ledger entries must not include:
+
+- ContextFrame payloads
+- screenshot or camera pixels
+- audio samples or transcripts
+- raw window titles
+- message contents
+- file contents
+
+Set `SENSE_LEDGER_DISABLED=1` to disable ledger writes.
 
 ## Doctor Command
 
@@ -132,6 +164,7 @@ Examples:
 Clients should:
 
 - call `get_relevant_context` before deciding whether media is needed
+- honor `context_plan.expected_value`, `context_plan.plan_only`, and the token budget
 - call the narrowest tool that answers the request
 - honor `minimum_tool`, `avoided_tools`, `fallbacks`, and `privacy_notes`
 - use `privacy.capability_details` to explain missing context

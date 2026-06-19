@@ -313,6 +313,7 @@ function usage(): string {
     "  status",
     "  permissions",
     "  doctor",
+    "  ledger",
     "  panel [--open] [--port <number>]",
     "  enable <camera|screen|mic|raw-titles|workspace> [value]",
     "  disable <camera|screen|mic|raw-titles|workspace>",
@@ -403,6 +404,27 @@ export async function runCli(argv: string[]): Promise<number> {
   if (command === "doctor") {
     const { createDoctorReport, renderDoctorReport } = await import("./doctor.js");
     console.log(renderDoctorReport(await createDoctorReport()));
+    return 0;
+  }
+
+  if (command === "ledger") {
+    const { readAccessLedger, ledgerPath } = await import("./ledger.js");
+    const entries = await readAccessLedger(20);
+    console.log(`Sense access ledger: ${ledgerPath()}`);
+    if (entries.length === 0) {
+      console.log("No entries yet.");
+      return 0;
+    }
+    for (const entry of entries) {
+      const domains = entry.context_domains.length ? entry.context_domains.join(",") : "none";
+      const budget =
+        entry.budget_mode && entry.max_tokens !== undefined
+          ? ` budget=${entry.budget_mode}/${entry.max_tokens}`
+          : "";
+      console.log(
+        `${entry.observed_at} ${entry.status} ${entry.tool} media=${entry.media_captured ? "yes" : "no"} domains=${domains}${budget} - ${entry.reason}`,
+      );
+    }
     return 0;
   }
 

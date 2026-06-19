@@ -29,6 +29,13 @@ Sense is a public preview and is intentionally conservative.
 
 ## Context
 
+- `context_plan.expected_value` is heuristic. It is meant to prevent obvious
+  overuse of context, not prove that context will improve every response.
+- `context_plan.budget.max_tokens` is a client guidance hint, not an enforced
+  tokenizer limit.
+- The `situation` card is a compact summary of available semantic fields. It is
+  useful for token efficiency, but it is lossy and should not replace evidence
+  when precision matters.
 - Active-window labels are semantic classifications, not a promise that Sense
   understood the full app content.
 - Calendar event labels are generic by default.
@@ -44,3 +51,10 @@ Sense is a public preview and is intentionally conservative.
 - Workspace context is only available for configured roots.
 - Quality metadata helps clients avoid overclaiming, but clients must still
   phrase uncertain context carefully.
+
+## Ledger
+
+- The privacy ledger stores local metadata about Sense tool calls, not
+  ContextFrames, pixels, audio, or raw content.
+- Ledger reasons are redacted and truncated, but they are still local metadata.
+  Set `SENSE_LEDGER_DISABLED=1` if you do not want ledger writes.

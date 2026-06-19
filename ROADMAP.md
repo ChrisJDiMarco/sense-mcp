@@ -7,8 +7,12 @@ surveillance device.
 ## Current Focus
 
 - Make setup obvious for Codex, Claude Desktop, and other MCP clients.
-- Keep routing behavior predictable with fixtures and prompt evals.
-- Improve panel diagnostics without storing private history.
+- Make Sense a context broker: estimate value, budget tokens, and choose the
+  smallest useful local signal.
+- Keep routing and context-budget behavior predictable with fixtures and prompt
+  evals.
+- Improve panel diagnostics and the metadata-only privacy ledger without storing
+  frames, pixels, audio, or raw private content.
 - Preserve the ContextFrame contract as sensors expand.
 
 ## Near-Term
@@ -16,6 +20,8 @@ surveillance device.
 - Better client-specific setup detection in `sense-mcp doctor`.
 - Screenshot and camera permission diagnostics that name the exact macOS pane.
 - More routing fixtures for privacy boundaries, visual requests, and workspace use.
+- Paired baseline-vs-Sense response evals that measure answer lift per token.
+- Better situation-card compression and short-term semantic session summaries.
 - Optional generated demo assets for README and release pages.
 - NPM publishing once the first public tag is stable.
 
@@ -34,4 +40,3 @@ surveillance device.
 - Reading private messages or credentials from the screen.
 - Cloud sync of context frames.
 - Persistent behavioral profiling.
-

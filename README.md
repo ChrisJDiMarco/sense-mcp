@@ -14,10 +14,12 @@ MCP gave AI tools and memory. Sense gives it privacy-first local context.
 
 </div>
 
-`sense-mcp` is a local MCP server that helps an AI client understand the user's
-current situation: active work mode, presence, time pressure, battery, device
-setup, rough environment, and optional explicit camera/screen snapshots. The
-server is client-agnostic MCP; the built-in sensors are macOS-first today.
+`sense-mcp` is a local MCP server that acts as a context broker for AI clients.
+It helps the client decide whether local context would actually improve the
+answer, then exposes the smallest useful signal: active work mode, presence,
+time pressure, battery, device setup, rough environment, a compact situation
+card, and optional explicit camera/screen snapshots. The server is
+client-agnostic MCP; the built-in sensors are macOS-first today.
 
 It is built around one constraint: **the AI should understand the moment without
 surveilling the person.**
@@ -52,10 +54,13 @@ Sense now includes a small trust layer around the raw sensors:
 | Layer | What it improves |
 |---|---|
 | Smarter router | Returns intent, confidence, minimum tool, avoided tools, fallbacks, and privacy notes. |
+| Context broker | Adds `context_plan` with expected value, token budget, included/excluded context, and connector hints. |
+| Situation card | Adds a compact summary, evidence, unknowns, risks, recommendations, and recent safe changes. |
 | Context quality | Marks fields as observed, classified, derived, or summary, with source and staleness. |
 | State smoothing | Adds a short in-memory stability signal so app switches do not get overread. |
 | Sensitivity labels | Flags private communication, banking, credentials, and health contexts generically. |
 | Capability diagnostics | Explains missing Calendar, mic, focus, and ambient-light signals instead of just saying unavailable. |
+| Privacy ledger | Records local metadata about Sense tool calls, reasons, budgets, and artifacts without storing frames or pixels. |
 | Doctor command | Checks Node, platform, ffmpeg, config, opt-ins, workspace, panel, and live sensor diagnostics. |
 | Routing eval | Runs adversarial fixtures and the 51-prompt routing pack in `npm run check`. |
 
@@ -67,7 +72,9 @@ User asks
   v
 AI calls get_relevant_context
   |
-  +--> ordinary request: use semantic ContextFrame
+  +--> no expected value: answer normally, no frame
+  |
+  +--> useful local context: use tiny situation card + focused ContextFrame
   |
   +--> visual request: call one explicit snapshot tool
           |
@@ -79,14 +86,16 @@ AI calls get_relevant_context
 flowchart TD
   U["User request"] --> C["AI client"]
   C --> R["get_relevant_context"]
-  R --> F["ContextFrame<br/>semantic local state"]
+  R --> P["context_plan<br/>value + budget"]
+  P -->|"plan_only"| N["Answer normally"]
+  P -->|"focused"| F["ContextFrame<br/>situation + semantic state"]
   R --> T{"Visual request?"}
   T -->|"No"| A["Answer with context"]
   T -->|"Camera"| CAM["take_camera_snapshot"]
   T -->|"Screen"| SCR["take_screen_snapshot"]
-  CAM --> P["private temp PNG<br/>snapshot_path"]
-  SCR --> P
-  P --> A["Answer after inspection"]
+  CAM --> IMG["private temp PNG<br/>snapshot_path"]
+  SCR --> IMG
+  IMG --> A["Answer after inspection"]
 
   subgraph Local machine
     S["macOS sensors"]
@@ -217,17 +226,17 @@ After global or npm installation:
 sense-mcp panel --open
 ```
 
-The panel shows capability state, the trust model, health checks, recent
-explicit snapshot metadata, recent explicit tool activity, and known Sense env toggles. It binds to
-`127.0.0.1`, rejects non-local Host headers, and requires an ephemeral token for
-permission changes.
+The panel shows capability state, the trust model, health checks, the privacy
+ledger, recent explicit snapshot metadata, recent explicit tool activity, and
+known Sense env toggles. It binds to `127.0.0.1`, rejects non-local Host
+headers, and requires an ephemeral token for permission changes.
 
 ## Tools
 
 | Tool | Purpose | Captures media? |
 |---|---|---:|
 | `get_context_frame` | Full ContextFrame plus privacy and assistive posture | No |
-| `get_relevant_context` | Classifies the request and recommends the narrowest Sense tools | No |
+| `get_relevant_context` | Classifies the request and returns a context plan with value, budget, and the narrowest Sense tools | No |
 | `get_screen_context` | Current activity and privacy-safe work context | No |
 | `get_user_state` | Presence, idle state, and input cadence | No |
 | `get_environment_context` | Time, power, devices, media, light/noise/location when available | No |
@@ -303,6 +312,7 @@ node dist/index.js init --help
 node dist/index.js init --write --profile visual --workspace /absolute/path/to/workspace
 node dist/index.js status
 node dist/index.js doctor
+node dist/index.js ledger
 node dist/index.js panel --open
 node dist/index.js enable camera
 node dist/index.js enable screen
@@ -346,6 +356,14 @@ Sense emits the open `context-frame/0.2` envelope:
         "detail": "No focus-mode bridge is configured."
       }
     }
+  },
+  "situation": {
+    "summary": "User appears active working in sense-mcp, activity looks like coding, with 3 changed items, plugged in.",
+    "confidence": "medium",
+    "evidence": ["workspace sense-mcp", "activity coding", "3 changed items", "power ac_power"],
+    "unknowns": ["calendar: calendar_query_timeout"],
+    "recommendations": ["Use a direct calendar connector for account schedule timing when needed."],
+    "recent_changes": ["Working in sense-mcp (coding)", "Power ac_power"]
   },
   "screen": {
     "activity_class": "coding",
@@ -433,6 +451,7 @@ contains prompts for comparing Sense-enabled and baseline agent behavior.
 The eval pack checks:
 
 - relevance routing
+- context value and token-budget policy
 - camera and screen tool selection
 - time-pressure fit
 - workspace awareness

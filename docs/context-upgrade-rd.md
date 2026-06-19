@@ -41,6 +41,21 @@ Expand `sense-mcp` from Tier-1 screen/presence/time awareness into a broader loc
 - Config-changing panel requests must require an ephemeral panel token and reject non-localhost hosts.
 - The panel should clearly show that Codex must be restarted after permission changes.
 
+## Phase 4 Requirements
+
+- Treat Sense as a context broker, not only a sensor bundle.
+- Extend `get_relevant_context` with a `context_plan` that reports expected
+  value, budget mode, max token hint, plan-only behavior, included/excluded
+  context, and external connector recommendations.
+- Add a compact `situation` card to ContextFrames with summary, evidence,
+  unknowns, risks, recommendations, and recent safe semantic changes.
+- Add a short-term in-memory semantic timeline for continuity without storing
+  raw titles, pixels, audio, message text, or file contents.
+- Add a metadata-only access ledger and panel display for recent Sense tool
+  calls, while never storing ContextFrames or image/audio payloads.
+- Extend automated evals so they can assert broker policy in addition to tool
+  routing.
+
 ## Consent Defaults
 
 - Tier 0/1 local basics remain on by default.

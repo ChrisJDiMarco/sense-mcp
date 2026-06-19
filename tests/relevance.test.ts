@@ -11,6 +11,10 @@ describe("planRelevantContext", () => {
     expect(plan.relevant_domains).toContain("environment");
     expect(plan.requires_explicit_media).toBe(true);
     expect(plan.privacy_notes.join(" ")).toContain("explicit");
+    expect(plan.context_plan.expected_value).toBe("high");
+    expect(plan.context_plan.budget.mode).toBe("visual");
+    expect(plan.context_plan.include_frame).toBe(false);
+    expect(plan.context_plan.included_context).toEqual(["camera_snapshot"]);
   });
 
   test("routes hair checks to camera snapshot with hair mode", () => {
@@ -26,6 +30,8 @@ describe("planRelevantContext", () => {
     expect(plan.recommended_tools).toContain("take_screen_snapshot");
     expect(plan.snapshot_mode).toBe("screen_debug");
     expect(plan.relevant_domains).toContain("screen");
+    expect(plan.context_plan.include_frame).toBe(false);
+    expect(plan.context_plan.included_context).toEqual(["screen_snapshot"]);
   });
 
   test("does not screenshot non-deictic writing that mentions screen as a topic", () => {
@@ -43,6 +49,8 @@ describe("planRelevantContext", () => {
     expect(plan.recommended_tools).toEqual(["get_schedule_context", "get_user_state"]);
     expect(plan.relevant_domains).toEqual(["schedule", "user"]);
     expect(plan.avoided_tools).toContain("take_camera_snapshot");
+    expect(plan.context_plan.expected_value).toBe("high");
+    expect(plan.context_plan.external_context_needed).toContain("calendar_connector");
   });
 
   test("does not treat a bare quick question as time pressure", () => {
@@ -50,6 +58,8 @@ describe("planRelevantContext", () => {
     expect(plan.intent).toBe("no_local_context_needed");
     expect(plan.minimum_tool).toBe("none");
     expect(plan.recommended_tools).toEqual([]);
+    expect(plan.context_plan.plan_only).toBe(true);
+    expect(plan.context_plan.budget.max_tokens).toBe(0);
   });
 
   test("does not treat unrelated uses of state as focus state", () => {
@@ -57,6 +67,7 @@ describe("planRelevantContext", () => {
     expect(plan.intent).toBe("no_local_context_needed");
     expect(plan.minimum_tool).toBe("none");
     expect(plan.recommended_tools).toEqual([]);
+    expect(plan.context_plan.expected_value).toBe("none");
   });
 
   test("avoids media tools when prompt asks for non-visual writing help", () => {

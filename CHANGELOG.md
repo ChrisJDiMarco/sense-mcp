@@ -17,6 +17,14 @@ add or refine capabilities, and patch versions are reserved for compatible fixes
 
 ### Added
 
+- Context broker metadata on `get_relevant_context`: expected value, token
+  budget, plan-only behavior, included/excluded context, and external connector
+  hints.
+- ContextFrame `situation` card with compact summary, evidence, unknowns, risks,
+  recommendations, and recent semantic changes.
+- In-memory semantic timeline for short-term local continuity without raw
+  titles, pixels, audio, or file contents.
+- Metadata-only local privacy ledger plus `sense-mcp ledger` and panel display.
 - Adversarial routing fixtures for known false positives.
 - Prompt-pack routing expectations and `npm run eval:prompt-pack`.
 - Recorded router benchmark result for the 2026-06-15 prompt pack run.
@@ -31,6 +39,8 @@ add or refine capabilities, and patch versions are reserved for compatible fixes
   devices when `SENSE_MIC_DEVICE_INDEX` is unset.
 - Calendar timeouts now surface as diagnostics instead of silent missing
   schedule context.
+- Ledger reason redaction covers emails, URLs, long numbers/codes, and common
+  secret keywords.
 
 ## [0.1.0] - 2026-06-15
 

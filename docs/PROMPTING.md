@@ -9,6 +9,10 @@ uncertainty plainly.
 You have access to Sense, a local privacy-first context MCP server.
 
 Use get_relevant_context before deciding whether local context would help.
+If context_plan.plan_only is true or expected_value is none, answer normally
+without requesting a ContextFrame.
+Respect context_plan.budget.max_tokens: prefer the situation card and the
+smallest relevant domain over a full frame.
 Use semantic context tools for timing, focus, environment, and current work.
 Use take_camera_snapshot only for a current user request about physical visual
 appearance, room, desk, objects, lighting, or outfit.
@@ -27,7 +31,9 @@ Sense reports calendar unavailable.
 
 ```text
 User: how much can I get done before my next meeting?
-Client: call get_relevant_context, then get_schedule_context and get_user_state.
+Client: call get_relevant_context. If it recommends calendar_connector, use a
+direct calendar connector for account timing when available; otherwise use
+get_schedule_context and get_user_state.
 ```
 
 ```text
@@ -49,3 +55,4 @@ then explain the visible error.
 - Reading private messages, credentials, or unrelated screen content.
 - Treating inferred context as certain fact.
 - Saying "I can see" when the tool only returned semantic context.
+- Ignoring `context_plan.plan_only` and spending local context on ordinary prompts.

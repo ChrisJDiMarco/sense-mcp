@@ -26,6 +26,51 @@ function assertExactArray(actual, expected, label) {
   assertIncludes(actual, expected, label);
 }
 
+function assertContextPlan(actual, expected = {}) {
+  if (!expected) return;
+  if (expected.expected_value && actual.context_plan.expected_value !== expected.expected_value) {
+    throw new Error(
+      `context_plan.expected_value expected ${expected.expected_value}, got ${actual.context_plan.expected_value}`,
+    );
+  }
+  if (
+    typeof expected.plan_only === "boolean" &&
+    actual.context_plan.plan_only !== expected.plan_only
+  ) {
+    throw new Error(
+      `context_plan.plan_only expected ${expected.plan_only}, got ${actual.context_plan.plan_only}`,
+    );
+  }
+  if (
+    typeof expected.include_frame === "boolean" &&
+    actual.context_plan.include_frame !== expected.include_frame
+  ) {
+    throw new Error(
+      `context_plan.include_frame expected ${expected.include_frame}, got ${actual.context_plan.include_frame}`,
+    );
+  }
+  if (expected.budget_mode && actual.context_plan.budget.mode !== expected.budget_mode) {
+    throw new Error(
+      `context_plan.budget.mode expected ${expected.budget_mode}, got ${actual.context_plan.budget.mode}`,
+    );
+  }
+  assertIncludes(
+    actual.context_plan.external_context_needed,
+    expected.external_context_needed,
+    "context_plan.external_context_needed",
+  );
+  assertIncludes(
+    actual.context_plan.included_context,
+    expected.included_context,
+    "context_plan.included_context",
+  );
+  assertExcludes(
+    actual.context_plan.included_context,
+    expected.forbidden_included_context,
+    "context_plan.included_context",
+  );
+}
+
 async function main() {
   const root = path.join(__dirname, "..");
   const fixtures = JSON.parse(
@@ -64,6 +109,7 @@ async function main() {
           `requires_explicit_media expected ${fixture.requires_explicit_media}, got ${plan.requires_explicit_media}`,
         );
       }
+      assertContextPlan(plan, fixture.context_plan);
     } catch (err) {
       failures.push({
         name: fixture.name,

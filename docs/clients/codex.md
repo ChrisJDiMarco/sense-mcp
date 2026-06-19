@@ -51,11 +51,12 @@ Sense:
 
 ```text
 Use Sense when local context would materially improve the answer. Start with
-get_relevant_context for ambiguous requests. For visual appearance prompts, use
-take_camera_snapshot and inspect snapshot_path before answering. For visible
-screen/UI/debug prompts, use take_screen_snapshot and inspect snapshot_path
-before answering. Do not use camera or screen tools for ordinary writing,
-planning, or coding prompts.
+get_relevant_context for ambiguous requests. If context_plan.plan_only is true
+or expected_value is none, answer normally without fetching a ContextFrame. For
+visual appearance prompts, use take_camera_snapshot and inspect snapshot_path
+before answering. For visible screen/UI/debug prompts, use take_screen_snapshot
+and inspect snapshot_path before answering. Do not use camera or screen tools
+for ordinary writing, planning, or coding prompts.
 ```
 
 ## Troubleshooting
@@ -63,6 +64,7 @@ planning, or coding prompts.
 ```bash
 sense-mcp status
 sense-mcp doctor
+sense-mcp ledger
 sense-mcp panel --open
 ```
 

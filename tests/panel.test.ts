@@ -33,6 +33,7 @@ describe("sensePanelState", () => {
     expect(state.health.recommendations.join(" ")).toContain("Mic noise level is off");
     expect(state.health.recommendations.join(" ")).toContain("Focus mode needs");
     expect(state.recent_tool_activity).toEqual([]);
+    expect(state.privacy_ledger.entries).toEqual([]);
   });
 
   test("derives recent explicit tool activity from temp snapshot metadata", () => {
@@ -60,6 +61,27 @@ describe("sensePanelState", () => {
     expect(state.recent_tool_activity[0].tool).toBe("take_camera_snapshot");
     expect(state.recent_tool_activity[1].tool).toBe("take_screen_snapshot");
     expect(state.recent_tool_activity[0].note).toContain("no extra audit database");
+  });
+
+  test("includes privacy ledger entries when provided", () => {
+    const state = sensePanelState({}, [], "/tmp/config.toml", [
+      {
+        id: "1",
+        observed_at: "2026-06-15T12:00:00.000Z",
+        tool: "get_relevant_context",
+        status: "planned",
+        reason: "Local context is unlikely to change the answer.",
+        media_captured: false,
+        context_domains: [],
+        plan_intent: "no_local_context_needed",
+        expected_value: "none",
+        budget_mode: "none",
+        max_tokens: 0,
+      },
+    ]);
+
+    expect(state.privacy_ledger.entries).toHaveLength(1);
+    expect(state.privacy_ledger.entries[0].tool).toBe("get_relevant_context");
   });
 });
 
@@ -107,6 +129,7 @@ describe("renderPanelHtml", () => {
     expect(html).toContain("panel-token");
     expect(html).toContain("Restart Codex");
     expect(html).toContain("Health");
+    expect(html).toContain("Privacy Ledger");
     expect(html).toContain("Recent Tool Activity");
     expect(html).toContain("sense-mcp doctor");
   });

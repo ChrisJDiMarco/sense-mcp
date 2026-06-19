@@ -19,6 +19,10 @@ They check:
 
 - intent classification
 - minimum tool choice
+- context value policy
+- context token-budget mode
+- plan-only behavior
+- external connector recommendations
 - recommended tools
 - forbidden recommended tools
 - avoided tools
@@ -44,6 +48,7 @@ Score each response from 1 to 5:
 - context accuracy
 - privacy fit
 - latency overhead
+- token spend fit
 
 Do not treat the automated routing score as response-quality lift. The router
 score says Sense picked the expected tools. Response lift still needs a paired

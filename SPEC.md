@@ -44,6 +44,7 @@ image only when explicitly invoked for a current visual user request.
   "generated_at": "2026-06-11T14:32:08-04:00",
   "staleness_ms": 1200,
   "privacy": { ... },
+  "situation": { ... },
   "screen": { ... },
   "user": { ... },
   "environment": { ... },
@@ -60,6 +61,7 @@ image only when explicitly invoked for a current visual user request.
 | `generated_at` | ISO 8601 | When the frame was assembled. Required. |
 | `staleness_ms` | number | Age of the oldest observation included. Required. |
 | `privacy` | object | Consent tier and capability status. Required. |
+| `situation` | object | Optional compact summary, evidence, unknowns, risks, recommendations, and recent safe changes. |
 | `screen` | object | What the user is doing on screen. |
 | `user` | object | The user's physical/attention state. |
 | `environment` | object | Ambient physical context. |
@@ -141,9 +143,34 @@ capabilities. It lets clients explain missing context without guessing, for
 example `disabled_by_env`, `missing_focus_bridge`,
 `calendar_query_timeout`, or `ambient_light_not_exposed`.
 
-Confidence scores are deliberately excluded from v0.2: no current sensor
-produces calibrated confidence, and uncalibrated numbers are worse than none.
-May be revisited when a sensor class can justify them.
+Numeric confidence scores are deliberately excluded from v0.2: no current sensor
+produces calibrated probabilities, and uncalibrated numbers are worse than none.
+Coarse communication labels such as `situation.confidence: "medium"` are allowed
+when they describe evidence strength rather than probability.
+
+## `situation`
+
+```json
+{
+  "summary": "User appears active working in sense-mcp, activity looks like coding, with 3 changed items, plugged in.",
+  "confidence": "medium",
+  "evidence": ["workspace sense-mcp", "activity coding", "3 changed items", "power ac_power"],
+  "unknowns": ["calendar: calendar_query_timeout"],
+  "risks": [],
+  "recommendations": ["Use a direct calendar connector for account schedule timing when needed."],
+  "recent_changes": ["Working in sense-mcp (coding)", "Power ac_power"]
+}
+```
+
+The situation card is a lossy, token-frugal reading of the frame. It is meant
+for assistants that need a quick sense of the moment without repeating every
+field. It MUST avoid raw private content. `recent_changes` MUST be semantic
+event labels only, not titles, message text, screenshots, audio, or file
+contents.
+
+`confidence` here is not a calibrated model probability. It is a coarse
+communication posture based on evidence volume, freshness, and missing signals:
+`high` | `medium` | `low` | `unknown`.
 
 ## `screen`
 
@@ -257,10 +284,60 @@ does not capture media. It classifies the current request and returns:
 - `fallbacks`: what to do if the recommended tool is denied or unavailable.
 - `privacy_notes`: constraints the client should preserve in its answer.
 - `snapshot_mode`: optional task lens for vision tools.
-- `context`: a ContextFrame filtered to the relevant domains.
+- `context_plan`: expected context value, token budget, included/excluded
+  context, whether this is plan-only, and external connector recommendations.
+- `context`: a ContextFrame filtered to the relevant domains, omitted when
+  `context_plan.plan_only` is true.
+
+Example `context_plan`:
+
+```json
+{
+  "expected_value": "high",
+  "budget": { "mode": "focused", "max_tokens": 140 },
+  "plan_only": false,
+  "include_frame": true,
+  "include_situation": true,
+  "included_context": ["schedule_domain", "user_domain", "get_schedule_context"],
+  "excluded_context": ["camera_snapshot", "screen_snapshot"],
+  "external_context_needed": ["calendar_connector"],
+  "reason": "Schedule timing can change the recommendation; account calendar data may need a connector."
+}
+```
+
+`expected_value` is `none` | `low` | `medium` | `high`. Clients SHOULD treat
+`none` plus `plan_only: true` as an instruction to answer normally without
+pulling a ContextFrame. `budget.max_tokens` is a hint for the textual context
+budget, not a hard protocol limit.
 
 Clients SHOULD use this before guessing whether camera, screen, schedule, or
 environment tools are appropriate.
+
+## Access ledger
+
+Implementations MAY keep a local metadata-only access ledger so the user can see
+which Sense tools were requested, when, why, and whether media was captured.
+
+Ledger entries MUST NOT store ContextFrames, screenshots, camera pixels, audio,
+raw window titles, message text, or file contents. A compliant ledger entry may
+include:
+
+```json
+{
+  "observed_at": "2026-06-15T12:00:00.000Z",
+  "tool": "get_relevant_context",
+  "status": "planned",
+  "reason": "Local context is unlikely to change the answer.",
+  "media_captured": false,
+  "context_domains": [],
+  "expected_value": "none",
+  "budget_mode": "none",
+  "max_tokens": 0
+}
+```
+
+The ledger is a transparency aid, not an authorization system. It SHOULD be
+local, bounded, and user-inspectable, and it SHOULD allow disabling.
 
 ## Explicit snapshot tools
 
@@ -371,6 +448,8 @@ on read.
   classification table and client behavior guide. Rejected: per-domain numeric
   confidence (uncalibrated), per-frame `raw_data_*` attestation booleans
   (spec invariants, not data), separate `derived` wire block (flat format wins).
+- **0.2 broker addendum** — Added optional `situation`, `context_plan`, and a
+  metadata-only local access ledger.
 - **0.1** — Initial draft.
 
 ---

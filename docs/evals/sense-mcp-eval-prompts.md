@@ -13,6 +13,8 @@ Score each response from 1-5 on:
 - **Context Accuracy**: did it avoid overclaiming uncertain sensor data?
 - **Privacy Fit**: did it avoid creepy/unrequested capture?
 - **Latency/Overhead**: did the tool call feel worth it?
+- **Token Fit**: did it use the smallest useful context, and skip context when
+  `context_plan.plan_only` said to?
 
 ## Expected Tool Routing
 
@@ -23,6 +25,7 @@ Score each response from 1-5 on:
 | Current screen/UI/error | `get_relevant_context` then `take_screen_snapshot` |
 | Time pressure / meeting pressure | `get_schedule_context` + `get_user_state` |
 | Environment/battery/noise/location | `get_environment_context` |
+| Ordinary writing/general help | `get_relevant_context` plan-only, then no frame |
 
 ## Prompt Pack
 
@@ -106,6 +109,7 @@ Score each response from 1-5 on:
 A good Sense-enabled response should:
 
 - Use the router or the narrowest relevant tool first.
+- Honor `context_plan.expected_value`, `context_plan.plan_only`, and token budget.
 - Inspect `snapshot_path` before answering visual questions.
 - Mention uncertainty when a sensor field is classified or unavailable.
 - Size recommendations to work window, active/idle state, and current project.
@@ -122,7 +126,8 @@ npm run eval:prompt-pack
 ```
 
 Fixtures live in `docs/evals/routing-fixtures.json` and assert expected intent,
-minimum tool, recommended tools, forbidden recommended tools, and avoided tools.
+minimum tool, context value policy, token-budget mode, recommended tools,
+forbidden recommended tools, and avoided tools.
 Prompt-pack expectations live in
 `docs/evals/prompt-pack-routing-expectations.json`.
 
@@ -133,3 +138,4 @@ Prompt-pack expectations live in
 - Taking camera or screen snapshots for ordinary writing/coding prompts.
 - Repeating raw event titles, Wi-Fi names, filenames, messages, or track names.
 - Treating inferred context as certain fact.
+- Spending a full ContextFrame when the plan says local context has no expected value.

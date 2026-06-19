@@ -37,6 +37,9 @@ SENSE_CAMERA_SNAPSHOT=1
 
 ```bash
 node dist/index.js doctor
+node dist/index.js ledger
 node dist/index.js panel --open
 ```
 
+When prompting Claude Code, start with `get_relevant_context`. If
+`context_plan.plan_only` is true, answer normally without pulling a ContextFrame.

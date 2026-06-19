@@ -14,7 +14,7 @@ npm run check
 
 | Check | Score |
 |---|---:|
-| Unit tests | 74/74 |
+| Unit tests | 83/83 |
 | Adversarial routing fixtures | 15/15 |
 | Prompt-pack routing expectations | 51/51 |
 | Production dependency audit | 0 vulnerabilities |
@@ -32,8 +32,10 @@ npm run check
 ## Interpretation
 
 The measurable router score is currently `51/51` on the prompt pack and `15/15`
-on adversarial fixtures. That proves the routing layer is behaving against the
-published expectations.
+on adversarial fixtures. The fixtures now also assert selected context broker
+policy, including expected value, plan-only behavior, token-budget mode, and
+calendar connector recommendations. That proves the routing and broker layers
+are behaving against the published expectations.
 
 The harder product bet - whether Sense improves final answers versus a baseline
 client - is still pending a paired client run scored on relevance,

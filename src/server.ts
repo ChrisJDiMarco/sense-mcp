@@ -8,6 +8,7 @@ import { planRelevantContext } from "./relevance.js";
 import { takeCameraSnapshot, type CameraSnapshotMode } from "./sensors/camera.js";
 import { takeScreenSnapshot, type ScreenSnapshotMode } from "./sensors/screenSnapshot.js";
 import { snapshotFailureHint } from "./snapshotAdvice.js";
+import { recordAccess } from "./ledger.js";
 
 const cameraModeSchema = z
   .enum([
@@ -33,14 +34,25 @@ const screenModeSchema = z
 export function createServer(store: StateStore, getPrivacy: () => Privacy): McpServer {
   const server = new McpServer({ name: "sense-mcp", version: "0.1.0" });
 
-  const respond = (domains?: Domain[]) => ({
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify(buildFrame(store, domains, Date.now(), getPrivacy()), null, 2),
-      },
-    ],
-  });
+  const respond = (tool: string, domains?: Domain[]) => {
+    const frame = buildFrame(store, domains, Date.now(), getPrivacy());
+    void recordAccess({
+      tool,
+      status: "completed",
+      reason: domains?.length ? `Requested ${domains.join(", ")} context.` : "Requested full context frame.",
+      media_captured: false,
+      context_domains: domains ?? ["screen", "user", "environment", "schedule"],
+      privacy_tier: frame.privacy.tier,
+    });
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(frame, null, 2),
+        },
+      ],
+    };
+  };
 
   server.tool(
     "get_context_frame",
@@ -53,14 +65,15 @@ export function createServer(store: StateStore, getPrivacy: () => Privacy): McpS
       "ephemeral. Missing fields mean unknown. Respect assistive_posture for " +
       "proactive suggestions only — a direct question always gets an answer.",
     {},
-    async () => respond(),
+    async () => respond("get_context_frame"),
   );
 
   server.tool(
     "get_relevant_context",
-    "Classify a user request and return the ContextFrame domains plus explicit Sense tools " +
-      "that are most relevant. Use this when deciding whether to call camera, screen, " +
-      "schedule, environment, or full context tools. It does not capture images by itself.",
+    "Classify a user request and return a context_plan with expected value, token budget, " +
+      "plan-only guidance, connector hints, relevant ContextFrame domains, and explicit " +
+      "Sense tools. Use this before deciding whether to call camera, screen, schedule, " +
+      "environment, or full context tools. It does not capture images by itself.",
     {
       user_request: z
         .string()
@@ -70,6 +83,22 @@ export function createServer(store: StateStore, getPrivacy: () => Privacy): McpS
     },
     async ({ user_request }) => {
       const plan = planRelevantContext(user_request);
+      const frame = plan.context_plan.include_frame
+        ? buildFrame(store, plan.relevant_domains, Date.now(), getPrivacy())
+        : undefined;
+      void recordAccess({
+        tool: "get_relevant_context",
+        status: plan.context_plan.plan_only ? "planned" : "completed",
+        reason: plan.context_plan.reason,
+        media_captured: false,
+        context_domains: plan.context_plan.include_frame ? plan.relevant_domains : [],
+        privacy_tier: frame?.privacy.tier,
+        plan_intent: plan.intent,
+        expected_value: plan.context_plan.expected_value,
+        budget_mode: plan.context_plan.budget.mode,
+        max_tokens: plan.context_plan.budget.max_tokens,
+        external_context_needed: plan.context_plan.external_context_needed,
+      });
       return {
         content: [
           {
@@ -77,7 +106,9 @@ export function createServer(store: StateStore, getPrivacy: () => Privacy): McpS
             text: JSON.stringify(
               {
                 ...plan,
-                context: buildFrame(store, plan.relevant_domains, Date.now(), getPrivacy()),
+                ...(frame
+                  ? { context: frame }
+                  : { context_omitted: "plan_only: local context is unlikely to change this answer" }),
               },
               null,
               2,
@@ -94,7 +125,7 @@ export function createServer(store: StateStore, getPrivacy: () => Privacy): McpS
       "privacy-safe window label, activity class). Cheaper and more focused " +
       "than the full frame.",
     {},
-    async () => respond(["screen"]),
+    async () => respond("get_screen_context", ["screen"]),
   );
 
   server.tool(
@@ -102,7 +133,7 @@ export function createServer(store: StateStore, getPrivacy: () => Privacy): McpS
     "Get only the user's presence and input state (active/idle/away, input " +
       "cadence). Useful for judging whether they're heads-down or available.",
     {},
-    async () => respond(["user"]),
+    async () => respond("get_user_state", ["user"]),
   );
 
   server.tool(
@@ -111,7 +142,7 @@ export function createServer(store: StateStore, getPrivacy: () => Privacy): McpS
       "coarse location class, media playback state, lighting/noise when available, " +
       "and optional local semantic health/weather bridge fields.",
     {},
-    async () => respond(["environment"]),
+    async () => respond("get_environment_context", ["environment"]),
   );
 
   server.tool(
@@ -122,14 +153,14 @@ export function createServer(store: StateStore, getPrivacy: () => Privacy): McpS
       "and the client has a direct calendar connector, prefer the connector for " +
       "account calendar data.",
     {},
-    async () => respond(["schedule"]),
+    async () => respond("get_schedule_context", ["schedule"]),
   );
 
   server.tool(
     "get_domains",
     "Get specific ContextFrame domains.",
     { domains: z.array(z.enum(["screen", "user", "environment", "schedule"])) },
-    async ({ domains }) => respond(domains as Domain[]),
+    async ({ domains }) => respond("get_domains", domains as Domain[]),
   );
 
   server.tool(
@@ -165,6 +196,15 @@ export function createServer(store: StateStore, getPrivacy: () => Privacy): McpS
         error: snapshot.error,
         fix_hint: snapshot.ok ? undefined : snapshotFailureHint("camera", snapshot.error),
       };
+      void recordAccess({
+        tool: "take_camera_snapshot",
+        status: snapshot.ok ? "completed" : "failed",
+        reason,
+        media_captured: snapshot.ok,
+        context_domains: [],
+        artifact_paths: snapshot.path ? [snapshot.path] : [],
+        error: snapshot.error,
+      });
 
       if (!snapshot.ok || !snapshot.data || !snapshot.mimeType) {
         return {
@@ -223,6 +263,15 @@ export function createServer(store: StateStore, getPrivacy: () => Privacy): McpS
         error: snapshot.error,
         fix_hint: snapshot.ok ? undefined : snapshotFailureHint("screen", snapshot.error),
       };
+      void recordAccess({
+        tool: "take_screen_snapshot",
+        status: snapshot.ok ? "completed" : "failed",
+        reason,
+        media_captured: snapshot.ok,
+        context_domains: [],
+        artifact_paths: snapshot.path ? [snapshot.path] : [],
+        error: snapshot.error,
+      });
 
       if (!snapshot.ok || !snapshot.data || !snapshot.mimeType) {
         return {
