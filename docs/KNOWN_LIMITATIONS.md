@@ -52,6 +52,18 @@ Sense is a public preview and is intentionally conservative.
 - Quality metadata helps clients avoid overclaiming, but clients must still
   phrase uncertain context carefully.
 
+## iOS Companion
+
+- The iOS app is a companion self-report channel, not a standalone MCP server.
+- The default bridge URL is for simulator/dev on the Mac:
+  `http://127.0.0.1:3777/api/iphone-context`.
+- The Mac panel binds to localhost by default. Physical iPhone sync needs
+  `sense-mcp settings --lan --open` on a trusted network.
+- LAN mode exposes only `/api/iphone-context`, not panel settings APIs.
+- Bridge writes require `Authorization: Bearer <token>` in LAN mode plus
+  `X-Sense-Bridge: sense-ios`; this is private-alpha protection, not a defense
+  against malicious local processes.
+
 ## Ledger
 
 - The privacy ledger stores local metadata about Sense tool calls, not

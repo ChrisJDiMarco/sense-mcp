@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { classifyAmbientLight, parseAmbientLight } from "../src/sensors/ambientLight.js";
+import { iphoneContextObservation, sanitizeIphoneContextPayload } from "../src/iphoneContext.js";
 import {
   classifyNoise,
   parseAvfoundationAudioDevices,
@@ -30,6 +31,88 @@ describe("battery sensor parsing", () => {
       power_source: "battery",
       low_power: false,
     });
+  });
+});
+
+describe("iPhone context bridge", () => {
+  test("sanitizes self-report payloads into expiring user context", () => {
+    const generatedAt = new Date(Date.now() - 60_000).toISOString();
+    const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
+    const payload = sanitizeIphoneContextPayload({
+      type: "sense_ios_check_in",
+      generated_at: generatedAt,
+      expires_at: expiresAt,
+      source: "iphone_action_button",
+      internal_state: {
+        feeling: "Focused",
+        energy: 1.2,
+        stress: -1,
+        focus: 0.88,
+        confidence: "medium",
+        note: "Ready to work.",
+        context_mode: "Deep Work",
+        semantic_tags: ["Protect Focus", "direct", 123, "  "],
+      },
+      iphone_context: {
+        generated_at: generatedAt,
+        device: {
+          battery_percent: 0.82,
+          power_state: "charging",
+          low_power_mode: false,
+          thermal_state: "nominal",
+          device_model: "iPhone",
+          system_version: "26.5",
+        },
+        motion: {
+          activity_class: "walking",
+          activity_confidence: "high",
+          steps_today: 1234,
+          distance_meters_today: 900.2,
+          floors_ascended_today: 2,
+        },
+        noise: {
+          noise_class: "moderate",
+          average_dbfs: -41.2,
+          peak_dbfs: -29.1,
+          sampled_seconds: 0.7,
+          audio_retained: false,
+        },
+        health: {
+          health_available: true,
+          steps_today: 4321,
+          active_energy_kcal_today: 220.5,
+          heart_rate_bpm: 72,
+          resting_heart_rate_bpm: 58,
+          sleep_minutes_last_24h: 420,
+        },
+      },
+      assistive_hint: "protect_focus_and_keep_responses_concise",
+      privacy: {
+        scope: "semantic_self_report",
+        audio_retained: "false",
+        iphone_signals: "device_motion_noise_health_summary",
+        ignored: "nope",
+      },
+    });
+
+    expect(payload.internal_state.feeling).toBe("focused");
+    expect(payload.internal_state.energy).toBe(1);
+    expect(payload.internal_state.stress).toBe(0);
+    expect(payload.internal_state.context_mode).toBe("Deep Work");
+    expect(payload.internal_state.semantic_tags).toEqual(["protect_focus", "direct"]);
+    expect(payload.privacy.ignored).toBeUndefined();
+
+    const observation = iphoneContextObservation(payload, Date.now());
+    expect(observation?.sensor).toBe("iphone-context-bridge");
+    expect(observation?.domain).toBe("user");
+    expect(observation?.fields.self_report_feeling).toBe("focused");
+    expect(observation?.fields.self_report_note).toBe("Ready to work.");
+    expect(observation?.fields.self_report_context_mode).toBe("Deep Work");
+    expect(observation?.fields.self_report_semantic_tags).toBe("protect_focus,direct");
+    expect(observation?.fields.iphone_power_state).toBe("charging");
+    expect(observation?.fields.iphone_activity_class).toBe("walking");
+    expect(observation?.fields.iphone_noise_class).toBe("moderate");
+    expect(observation?.fields.iphone_health_steps_today).toBe(4321);
   });
 });
 

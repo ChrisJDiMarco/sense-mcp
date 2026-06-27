@@ -19,6 +19,7 @@ add or refine capabilities, and patch versions are reserved for compatible fixes
 
 ### Added
 
+- GitHub Actions CI for the README's Node 20/22 release signal.
 - `sense-mcp settings --open` as a clearer alias for the local settings panel,
   plus first-run and doctor guidance that points users to it.
 - Context broker metadata on `get_relevant_context`: expected value, token
@@ -36,9 +37,19 @@ add or refine capabilities, and patch versions are reserved for compatible fixes
 - ContextFrame `privacy.capability_details` for denied or unavailable sensors.
 - Calendar connector fallback guidance for clients that have direct account
   calendar connections.
+- iOS companion check-ins with expiring semantic self-report payloads, optional
+  device/motion/noise/health summaries, bridge receipts, and panel display.
+- `sense-mcp settings --lan --open` for explicit bridge-only physical iPhone
+  sync on a trusted network.
 
 ### Fixed
 
+- Ignored generated Xcode build/user-state artifacts so the iOS companion source
+  can be shared without local build noise.
+- Hardened iPhone bridge writes with a companion header and documented the
+  localhost-only physical-device limitation.
+- Kept LAN bridge mode separate from the localhost settings panel and protected
+  LAN writes with a bearer token.
 - Mic level sampling now prefers a real microphone input over virtual audio
   devices when `SENSE_MIC_DEVICE_INDEX` is unset.
 - Calendar timeouts now surface as diagnostics instead of silent missing

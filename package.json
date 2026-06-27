@@ -20,6 +20,9 @@
   "homepage": "https://github.com/ChrisJDiMarco/sense-mcp#readme",
   "files": [
     "dist",
+    "apps/ios/SenseIOS/SenseIOS",
+    "apps/ios/SenseIOS/SenseIOS.xcodeproj/project.pbxproj",
+    "apps/ios/SenseIOS/SenseIOS.xcodeproj/xcshareddata/xcschemes/SenseIOS.xcscheme",
     "SPEC.md",
     "README.md",
     "LICENSE",
@@ -36,6 +39,7 @@
     "smoke": "node scripts/smoke.cjs",
     "eval:routing": "node scripts/eval-routing.cjs",
     "eval:prompt-pack": "node scripts/eval-prompt-pack.cjs",
+    "ios:build": "xcodebuild -project apps/ios/SenseIOS/SenseIOS.xcodeproj -scheme SenseIOS -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build",
     "test": "vitest run",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "check": "npm run build && npm test && npm run eval:routing && npm run eval:prompt-pack && npm run audit:prod",

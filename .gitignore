@@ -9,3 +9,9 @@ coverage/
 *.tmp
 tmp/
 .sense-snapshots/
+DerivedData/
+apps/ios/**/build/
+apps/ios/**/build-*/
+apps/ios/**/*.xcuserdata/
+apps/ios/**/*.xcuserstate
+*.xcactivitylog

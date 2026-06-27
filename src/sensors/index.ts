@@ -7,7 +7,7 @@ import { calendarSensor } from "./calendar.js";
 import { cameraSensor } from "./camera.js";
 import { devicesSensor } from "./devices.js";
 import { focusModeSensor } from "./focusMode.js";
-import { healthBridgeSensor, weatherBridgeSensor } from "./semanticBridge.js";
+import { healthBridgeSensor, iphoneContextBridgeSensor, weatherBridgeSensor } from "./semanticBridge.js";
 import { idleSensor } from "./idle.js";
 import { locationSensor } from "./location.js";
 import { mediaSensor } from "./media.js";
@@ -32,5 +32,6 @@ export const sensors: Sensor[] = [
   cameraSensor,
   healthBridgeSensor,
   weatherBridgeSensor,
+  iphoneContextBridgeSensor,
   mockSensor,
 ];
