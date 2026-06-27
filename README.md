@@ -122,7 +122,7 @@ Current reliability checks:
 
 | Check | Current result |
 |---|---:|
-| Unit tests | 83 passing |
+| Unit tests | 85 passing |
 | Adversarial routing fixtures | 15/15 |
 | Prompt-pack routing expectations | 51/51 |
 | Production dependency audit | 0 vulnerabilities |
@@ -275,6 +275,40 @@ Security properties:
 - rejects non-local Host headers
 - requires an ephemeral token for permission changes
 
+## iOS Companion
+
+The Swift iOS app in `apps/ios/SenseIOS` is a companion, not a replacement for
+the desktop MCP server. Sense MCP still runs on the Mac where the AI client can
+use local context. The iPhone app adds an intentional self-report channel:
+
+- Action Button voice check-ins
+- feeling, energy, stress, and focus sliders
+- optional iPhone device state, motion/steps, ambient noise class, and Health summaries
+- expiring semantic context payloads
+- local bridge sync to `http://127.0.0.1:3777/api/iphone-context` for simulator/dev
+- in-app GitHub, install command, MCP config, bridge URL, and connection test
+
+The iPhone signals are opt-in and summarized before sync. Sense does not retain
+raw audio; the companion sends noise class and dBFS meter values only. HealthKit
+data is reduced to broad fields such as steps, active energy, heart rate, and
+sleep minutes.
+
+The desktop settings panel accepts iPhone companion payloads at
+`/api/iphone-context` and stores the latest expiring payload in
+`~/.sense-mcp/iphone-context.json` by default. Override that path with
+`SENSE_IPHONE_CONTEXT_PATH`. Bridge writes are localhost-only and require the
+companion's `X-Sense-Bridge: sense-ios` header to avoid blind browser posts.
+Physical iPhone sync is intentionally not exposed as a LAN listener by default.
+To try a physical iPhone on a trusted network, start the bridge-only LAN mode:
+
+```bash
+sense-mcp settings --lan --open
+```
+
+Paste the printed LAN bridge URL and token into the iPhone app's Setup tab. LAN
+mode exposes only `/api/iphone-context`, requires `Authorization: Bearer <token>`
+and `X-Sense-Bridge: sense-ios`, and does not expose panel settings APIs.
+
 ## MCP Tools
 
 | Tool | Purpose | Captures media? |
@@ -311,6 +345,7 @@ Every ContextFrame includes a `privacy` block with per-capability status:
 | `camera` | Camera availability and device count only | `ffmpeg` AVFoundation |
 | `health-bridge` | Optional local health/wearable semantic JSON | local JSON file |
 | `weather-bridge` | Optional local weather/daylight semantic JSON | local JSON file |
+| `iphone-context-bridge` | Optional expiring self-report context from the iOS companion | local JSON file |
 
 Calendar note: when an AI client has a direct Google Calendar or calendar
 connector, use that connector for account schedule data. Sense's Calendar sensor
@@ -358,6 +393,7 @@ node dist/index.js status
 node dist/index.js doctor
 node dist/index.js ledger
 node dist/index.js settings --open
+node dist/index.js settings --lan --open
 node dist/index.js enable camera
 node dist/index.js enable screen
 node dist/index.js enable mic

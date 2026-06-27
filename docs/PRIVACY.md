@@ -102,6 +102,29 @@ Security properties:
 - shows a metadata-only privacy ledger for recent Sense tool calls
 - shows a restart notice because MCP clients usually read env at startup
 
+## iOS Companion Bridge
+
+The iOS companion sends expiring semantic self-reports to the Mac panel bridge
+at `/api/iphone-context`. The bridge stores only the latest sanitized payload in
+`~/.sense-mcp/iphone-context.json` unless `SENSE_IPHONE_CONTEXT_PATH` overrides
+that path.
+
+Bridge payloads are:
+
+- localhost-only by default
+- reachable from a trusted network only when `sense-mcp settings --lan --open`
+  starts the separate bridge-only listener
+- capped in size
+- sanitized and expiration-limited
+- accepted only with `X-Sense-Bridge: sense-ios`
+- accepted over LAN only with `Authorization: Bearer <token>`
+- reduced to semantic observations before entering ContextFrames
+
+The LAN listener exposes only `/api/iphone-context`, not panel settings,
+permission writes, status, or ledger routes. The header blocks blind browser
+posts to localhost. The bearer token protects private-alpha LAN use; it is not
+meant to authenticate against another local process running as the same user.
+
 ## Privacy Ledger
 
 Sense records a small local access ledger by default in the OS temp directory

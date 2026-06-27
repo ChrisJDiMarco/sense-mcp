@@ -315,8 +315,8 @@ function usage(): string {
     "  permissions",
     "  doctor",
     "  ledger",
-    "  settings [--open] [--port <number>]",
-    "  panel [--open] [--port <number>]",
+    "  settings [--open] [--port <number>] [--lan] [--lan-port <number>]",
+    "  panel [--open] [--port <number>] [--lan] [--lan-port <number>]",
     "  enable <camera|screen|mic|raw-titles|workspace> [value]",
     "  disable <camera|screen|mic|raw-titles|workspace>",
   ].join("\n");
@@ -432,17 +432,30 @@ export async function runCli(argv: string[]): Promise<number> {
 
   if (command === "panel" || command === "settings" || command === "tray") {
     const open = argv.includes("--open");
+    const lanBridge = argv.includes("--lan");
     const portIndex = argv.indexOf("--port");
     const port =
       portIndex === -1 || !argv[portIndex + 1] ? undefined : Number(argv[portIndex + 1]);
+    const lanPortIndex = argv.indexOf("--lan-port");
+    const lanPort =
+      lanPortIndex === -1 || !argv[lanPortIndex + 1] ? undefined : Number(argv[lanPortIndex + 1]);
     if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) {
       console.error("Invalid port.");
       return 1;
     }
+    if (lanPort !== undefined && (!Number.isInteger(lanPort) || lanPort < 1 || lanPort > 65535)) {
+      console.error("Invalid LAN port.");
+      return 1;
+    }
 
     const { startPanel } = await import("./panel.js");
-    const panel = await startPanel({ open, port });
+    const panel = await startPanel({ open, port, lanBridge, lanPort });
     console.log(`Sense panel running at ${panel.url}`);
+    if (panel.lanBridge) {
+      console.log(`iPhone LAN bridge running at ${panel.lanBridge.url}`);
+      console.log(`Bridge token: ${panel.lanBridge.token}`);
+      console.log("Paste the URL and token into the Sense iPhone app.");
+    }
     console.log("Press Ctrl+C to stop.");
     return new Promise<number>(() => undefined);
   }

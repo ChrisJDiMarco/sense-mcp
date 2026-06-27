@@ -1,4 +1,5 @@
 import { access, readFile } from "node:fs/promises";
+import { iphoneContextPath, readIphoneContextObservation } from "../iphoneContext.js";
 import type { Domain, Observation, Sensor } from "../types.js";
 
 const TTL_MS = 60_000;
@@ -100,3 +101,20 @@ export const weatherBridgeSensor = bridgeSensor({
   domain: "environment",
   allowedFields: WEATHER_FIELDS,
 });
+
+/** Optional semantic bridge written by the Sense iPhone companion app. */
+export const iphoneContextBridgeSensor: Sensor = {
+  name: "iphone-context-bridge",
+  intervalMs: 60_000,
+  tier: 2,
+  capability: "iphone_context",
+  available: async () => {
+    try {
+      await access(iphoneContextPath());
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  sample: async () => readIphoneContextObservation(),
+};

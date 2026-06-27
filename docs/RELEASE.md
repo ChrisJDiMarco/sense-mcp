@@ -7,6 +7,7 @@ Use this checklist when cutting a public release.
 ```bash
 npm ci
 npm run release:dry-run
+npm run ios:build
 sense-mcp doctor
 ```
 
@@ -17,6 +18,8 @@ Check that:
 - `README.md` quickstart matches the current CLI.
 - `SPEC.md` reflects any ContextFrame shape changes.
 - New capabilities are covered by tests and privacy docs.
+- Run `npm run ios:build` when the iOS companion changed and Xcode is available.
+- Check `sense-mcp settings --lan --open` before claiming physical iPhone sync.
 
 ## Tag
 
@@ -47,4 +50,3 @@ npm publish --access public
 
 If publishing fails because the package name is taken or auth requires 2FA,
 stop and resolve that outside the release commit.
-

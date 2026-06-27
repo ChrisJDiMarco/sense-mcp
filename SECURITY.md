@@ -32,6 +32,12 @@ The intended security model is:
 - Snapshot files are temporary local files with private permissions.
 - The control panel binds to `127.0.0.1` and requires an ephemeral token for
   permission changes.
+- The iPhone companion bridge is localhost-only by default and requires
+  `X-Sense-Bridge: sense-ios` for write requests to reduce browser-based blind
+  posts.
+- `sense-mcp settings --lan --open` starts a separate bridge-only listener for
+  physical iPhone sync. It exposes only `/api/iphone-context` and requires a
+  bearer token printed by the command.
 - Known Sense environment keys are allowlisted before config writes.
 
 ## Out of Scope
