@@ -122,7 +122,7 @@ Current reliability checks:
 
 | Check | Current result |
 |---|---:|
-| Unit tests | 85 passing |
+| Unit tests | 86 passing |
 | Adversarial routing fixtures | 15/15 |
 | Prompt-pack routing expectations | 51/51 |
 | Production dependency audit | 0 vulnerabilities |
@@ -133,24 +133,28 @@ See [CHANGELOG.md](./CHANGELOG.md), [ROADMAP.md](./ROADMAP.md), and
 
 ## Quickstart
 
+Today, the recommended install path is a GitHub source checkout:
+
 ```bash
 git clone https://github.com/ChrisJDiMarco/sense-mcp.git
 cd sense-mcp
 npm install
 npm run build
-npm run check
 ```
 
-Generate an MCP client config:
+Then connect one MCP client.
 
-```bash
-node dist/index.js init --client codex --profile visual --workspace /absolute/path/to/workspace
-```
-
-Or write the Codex config directly:
+For Codex, write the config automatically:
 
 ```bash
 node dist/index.js init --write --profile visual --workspace /absolute/path/to/workspace
+```
+
+For Claude Code or another CLI-style MCP client, use this server command in
+that client's MCP config:
+
+```bash
+node /absolute/path/to/sense-mcp/dist/index.js
 ```
 
 Restart your MCP client, then verify setup:
@@ -167,6 +171,15 @@ node dist/index.js settings --open
 
 The settings panel lets users review permissions, toggle camera/screen/mic and
 workspace context, inspect health checks, and view the local privacy ledger.
+
+Run the full local validation suite with:
+
+```bash
+npm run check
+```
+
+If Sense is later installed globally, replace `node dist/index.js` with
+`sense-mcp` in the commands above.
 
 ## Setup Profiles
 
@@ -199,7 +212,13 @@ brew install ffmpeg
 
 ### Codex
 
-Add Sense to `~/.codex/config.toml`:
+The fastest path is:
+
+```bash
+node dist/index.js init --write --profile visual --workspace /absolute/path/to/workspace
+```
+
+Or add Sense to `~/.codex/config.toml` manually:
 
 ```toml
 [mcp_servers.sense]
@@ -219,6 +238,24 @@ SENSE_WORKSPACE_ROOTS = "/absolute/path/to/workspace"
 
 See [examples/codex_config.toml](./examples/codex_config.toml) and
 [docs/clients/codex.md](./docs/clients/codex.md).
+
+### Claude Code
+
+Claude Code MCP configuration varies by installation, but the Sense server
+process is the same:
+
+```bash
+node /absolute/path/to/sense-mcp/dist/index.js
+```
+
+For coding use, start with workspace and screen context:
+
+```bash
+SENSE_SCREEN_SNAPSHOT=1
+SENSE_WORKSPACE_ROOTS=/absolute/path/to/workspace
+```
+
+See [docs/clients/claude-code.md](./docs/clients/claude-code.md).
 
 ### Claude Desktop
 
@@ -252,7 +289,7 @@ Sense includes a localhost-only settings panel:
 node dist/index.js settings --open
 ```
 
-After global or npm installation:
+If Sense is later installed globally:
 
 ```bash
 sense-mcp settings --open
