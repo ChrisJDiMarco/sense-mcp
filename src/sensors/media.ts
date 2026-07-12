@@ -8,18 +8,18 @@ tell application "System Events"
   if exists process "Spotify" then
     tell application "Spotify"
       try
-        return "Spotify|" & (player state as string) & "|" & (artist of current track) & "|" & (name of current track)
+        return "Spotify|" & (player state as string)
       on error
-        return "Spotify|unknown||"
+        return "Spotify|unknown"
       end try
     end tell
   end if
   if exists process "Music" then
     tell application "Music"
       try
-        return "Music|" & (player state as string) & "|" & (artist of current track) & "|" & (name of current track)
+        return "Music|" & (player state as string)
       on error
-        return "Music|unknown||"
+        return "Music|unknown"
       end try
     end tell
   end if
@@ -48,9 +48,10 @@ export const mediaSensor: Sensor = {
   intervalMs: 30_000,
   tier: 2,
   capability: "now_playing",
+  domains: ["environment"],
   available: async () => isMac,
-  async sample(): Promise<Observation[]> {
-    const out = await run("osascript", ["-e", MEDIA_SCRIPT], 4000);
+  async sample(signal): Promise<Observation[]> {
+    const out = await run("/usr/bin/osascript", ["-e", MEDIA_SCRIPT], 4000, signal);
     if (!out) return [];
 
     const fields = parseMediaState(out);

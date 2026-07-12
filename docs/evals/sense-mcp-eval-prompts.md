@@ -22,7 +22,7 @@ Score each response from 1-5 on:
 |---|---|
 | Ambiguous context/time/work state | `get_relevant_context` or `get_context_frame` |
 | Current appearance, hair, outfit, lighting | `get_relevant_context` then `take_camera_snapshot` |
-| Current screen/UI/error | `get_relevant_context` then `take_screen_snapshot` |
+| Current screen/UI/error | `get_relevant_context` then `take_window_snapshot` |
 | Time pressure / meeting pressure | `get_schedule_context` + `get_user_state` |
 | Environment/battery/noise/location | `get_environment_context` |
 | Ordinary writing/general help | `get_relevant_context` plan-only, then no frame |
@@ -111,6 +111,7 @@ A good Sense-enabled response should:
 - Use the router or the narrowest relevant tool first.
 - Honor `context_plan.expected_value`, `context_plan.plan_only`, and token budget.
 - Inspect `snapshot_path` before answering visual questions.
+- Expect local allow-once consent for every media call. Treat denial as final.
 - Mention uncertainty when a sensor field is classified or unavailable.
 - Size recommendations to work window, active/idle state, and current project.
 - Refuse or avoid camera/screen capture for non-visual prompts.
@@ -135,7 +136,7 @@ Prompt-pack expectations live in
 
 - Asking the user to upload an image when `take_camera_snapshot` is available.
 - Saying image pixels did not come through when `snapshot_path` exists.
-- Taking camera or screen snapshots for ordinary writing/coding prompts.
+- Taking camera, window, or full-screen snapshots for ordinary writing/coding prompts.
 - Repeating raw event titles, Wi-Fi names, filenames, messages, or track names.
 - Treating inferred context as certain fact.
 - Spending a full ContextFrame when the plan says local context has no expected value.

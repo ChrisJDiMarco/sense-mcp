@@ -9,7 +9,7 @@ a standard local MCP server.
 node /absolute/path/to/sense-mcp/dist/index.js
 ```
 
-## Env
+## Conservative setup
 
 Start conservative:
 
@@ -17,12 +17,12 @@ Start conservative:
 SENSE_WORKSPACE_ROOTS=/absolute/path/to/workspace
 ```
 
-Opt into explicit media only when you want the model to answer current visual
-questions:
+Enable explicit media in central policy only when you want the model to answer
+current visual questions:
 
 ```bash
-SENSE_CAMERA_SNAPSHOT=1
-SENSE_SCREEN_SNAPSHOT=1
+sense-mcp enable camera
+sense-mcp enable screen
 ```
 
 ## Generate a Config Shape
@@ -39,3 +39,6 @@ The generated JSON is not Cursor-specific, but the server shape is the same:
 
 Client guidance should start with `get_relevant_context` and honor
 `context_plan.plan_only` so ordinary prompts do not spend local context.
+Use `take_window_snapshot` for one app window and reserve
+`take_full_screen_snapshot` for an explicit main-display request. Media capture
+requires local allow-once consent.

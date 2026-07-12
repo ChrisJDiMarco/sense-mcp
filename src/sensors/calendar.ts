@@ -1,186 +1,224 @@
 import type { Observation, Sensor, SensorDiagnostic } from "../types.js";
+import { policyEnabled } from "../policy.js";
 import { isMac, runCapture, type CommandResult } from "./exec.js";
 
 const TTL_MS = 60_000;
-const CALENDAR_TIMEOUT_MS = 8_000;
-let lastCalendarDiagnostic: SensorDiagnostic | null = null;
-
-type CalendarProbe =
-  | { kind: "current"; minutes: number; title?: string }
-  | { kind: "upcoming"; minutes: number; title?: string }
-  | null;
+const CALENDAR_TIMEOUT_MS = 2_000;
 
 export type CalendarFields = Record<string, string | number | boolean>;
 
-const CALENDAR_SCRIPT = `
-set nowDate to current date
-set windowEnd to nowDate + (8 * hours)
-set bestStart to missing value
-set bestTitle to ""
-
-tell application "Calendar"
-  repeat with cal in calendars
-    try
-      set matches to every event of cal whose end date is greater than nowDate and start date is less than windowEnd
-      repeat with ev in matches
-        set evStart to start date of ev
-        set evEnd to end date of ev
-        if evStart is less than or equal to nowDate and evEnd is greater than nowDate then
-          return "CURRENT|" & (round ((evEnd - nowDate) / minutes)) & "|" & (summary of ev)
-        end if
-        if evStart is greater than nowDate then
-          if bestStart is missing value or evStart is less than bestStart then
-            set bestStart to evStart
-            set bestTitle to summary of ev
-          end if
-        end if
-      end repeat
-    end try
-  end repeat
-end tell
-
-if bestStart is not missing value then
-  return "UPCOMING|" & (round ((bestStart - nowDate) / minutes)) & "|" & bestTitle
-end if
-return "NONE"
-`;
-
-export function parseCalendarProbe(line: string): CalendarFields | null {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed === "NONE") return classifyCalendarPressure(null);
-
-  const [kind, minutesRaw, title] = trimmed.split("|");
-  const minutes = Number(minutesRaw);
-  if (!Number.isFinite(minutes)) return null;
-
-  if (kind === "CURRENT") return classifyCalendarPressure({ kind: "current", minutes, title });
-  if (kind === "UPCOMING") return classifyCalendarPressure({ kind: "upcoming", minutes, title });
-  return null;
+interface CalendarSensorDependencies {
+  isMac: boolean;
+  policyEnabled: () => Promise<boolean>;
+  runCommand: (
+    command: string,
+    args: string[],
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ) => Promise<CommandResult | null>;
+  now: () => Date;
 }
 
-export function calendarDiagnosticFromResult(result: CommandResult | null): SensorDiagnostic | null {
-  if (!result) {
-    return {
-      reason: "calendar_query_failed",
-      detail: "Calendar query did not return a result.",
-      fixHint: "Open Calendar once, then run sense-mcp doctor.",
-    };
-  }
-  if (result.timedOut) {
+function disabledDiagnostic(): SensorDiagnostic {
+  return {
+    reason: "disabled_by_policy",
+    detail: "Calendar timing is disabled in the Sense policy.",
+    fixHint: "Run sense-mcp enable calendar if coarse local schedule pressure is wanted.",
+  };
+}
+
+function missingProviderDiagnostic(): SensorDiagnostic {
+  return {
+    reason: "headless_calendar_provider_missing",
+    detail: "The optional headless calendar helper is not installed.",
+    fixHint: "Install icalBuddy or use a direct calendar connector for account calendar data.",
+  };
+}
+
+function queryDiagnostic(result: CommandResult | null): SensorDiagnostic | null {
+  if (result?.timedOut) {
     return {
       reason: "calendar_query_timeout",
-      detail: `Calendar query exceeded ${Math.round(CALENDAR_TIMEOUT_MS / 1000)} seconds.`,
-      fixHint:
-        "Open Calendar once and check macOS Automation/Calendar permissions for the app running Sense.",
+      detail: "The headless calendar query timed out.",
+      fixHint: "Run sense-mcp doctor and check the optional icalBuddy installation.",
     };
   }
-  if (result.exitCode !== 0) {
+  if (!result || result.exitCode !== 0) {
     return {
-      reason: "calendar_permission_or_query_error",
-      detail: result.stderr || result.errorMessage || "Calendar query failed.",
-      fixHint: "Grant Calendar/Automation access to the app running Sense, then restart the MCP client.",
+      reason: "calendar_query_failed",
+      detail: "The headless calendar query failed without exposing calendar data.",
+      fixHint: "Run sense-mcp doctor or use a direct calendar connector.",
     };
   }
   return null;
 }
 
-function eventKind(title?: string): string {
-  const text = (title ?? "").toLowerCase();
-  if (/1:1|one.?on.?one/.test(text)) return "one_on_one";
-  if (/deep work|focus|block|heads.?down/.test(text)) return "focus_block";
-  if (/sales|demo|prospect|client|customer|call/.test(text)) return "external_call";
-  if (/doctor|dentist|personal|gym|therapy|health/.test(text)) return "personal";
-  if (!text) return "unknown";
-  return "meeting";
+function formatLocalDate(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    "-",
+    pad(date.getMonth() + 1),
+    "-",
+    pad(date.getDate()),
+    " ",
+    pad(date.getHours()),
+    ":",
+    pad(date.getMinutes()),
+    ":",
+    pad(date.getSeconds()),
+  ].join("");
 }
 
-function workWindow(minutes: number): string {
-  if (minutes <= 0) return "none";
-  if (minutes <= 20) return "short";
-  if (minutes <= 60) return "medium";
-  return "long";
+function eventQueryArgs(command: string): string[] {
+  // Include only date/time metadata. Sense checks whether output exists and
+  // never returns the helper's raw output.
+  return ["-cf", "", "-nc", "-npn", "-nrd", "-iep", "datetime", "-li", "1", "-b", "", "-ss", "", command];
 }
 
-function prepWindow(minutes: number): string {
-  if (minutes <= 15) return "now";
-  if (minutes <= 45) return "soon";
-  return "none";
+function containsEvent(result: CommandResult | null): boolean {
+  return result?.exitCode === 0 && result.stdout.trim().length > 0;
 }
 
-export function classifyCalendarPressure(probe: CalendarProbe): CalendarFields {
-  if (!probe) {
-    return {
-      in_meeting: false,
-      time_pressure: "none",
-      usable_work_minutes: 120,
-      work_window: "long",
-      meeting_state: "free",
-      prep_window: "none",
-    };
-  }
+async function resolveIcalBuddy(
+  dependencies: CalendarSensorDependencies,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const result = await dependencies.runCommand("/usr/bin/which", ["icalBuddy"], 1_000, signal);
+  if (!result || result.exitCode !== 0) return null;
+  const executable = result.stdout.trim();
+  return executable.startsWith("/") && !executable.includes("\n") ? executable : null;
+}
 
-  if (probe.kind === "current") {
+export function classifyCalendarWindow(
+  window: "current" | "within_15" | "within_45" | "none",
+): CalendarFields {
+  if (window === "current") {
     return {
       in_meeting: true,
-      current_event_label: "calendar event",
-      current_event_minutes_remaining: Math.max(0, Math.round(probe.minutes)),
       time_pressure: "high",
       usable_work_minutes: 0,
       work_window: "none",
       meeting_state: "in_meeting",
-      event_kind: eventKind(probe.title),
       prep_window: "now",
     };
   }
-
-  const minutes = Math.max(0, Math.round(probe.minutes));
-  const usableWorkMinutes = Math.max(0, minutes - 3);
-  const pressure = minutes <= 15 ? "high" : minutes <= 45 ? "moderate" : "none";
+  if (window === "within_15") {
+    return {
+      in_meeting: false,
+      next_event_minutes: 15,
+      time_pressure: "high",
+      usable_work_minutes: 12,
+      work_window: "short",
+      meeting_state: "upcoming",
+      prep_window: "now",
+    };
+  }
+  if (window === "within_45") {
+    return {
+      in_meeting: false,
+      next_event_minutes: 45,
+      time_pressure: "moderate",
+      usable_work_minutes: 42,
+      work_window: "medium",
+      meeting_state: "upcoming",
+      prep_window: "soon",
+    };
+  }
   return {
     in_meeting: false,
-    next_event_label: "calendar event",
-    next_event_minutes: minutes,
-    time_pressure: pressure,
-    usable_work_minutes: usableWorkMinutes,
-    work_window: workWindow(usableWorkMinutes),
-    meeting_state: "upcoming",
-    event_kind: eventKind(probe.title),
-    prep_window: prepWindow(minutes),
+    time_pressure: "none",
+    usable_work_minutes: 120,
+    work_window: "long",
+    meeting_state: "free",
+    prep_window: "none",
   };
 }
 
-/** Local macOS Calendar timing only. Event titles are never emitted by default. */
-export const calendarSensor: Sensor = {
-  name: "calendar",
-  intervalMs: 60_000,
-  tier: 2,
-  capability: "calendar",
-  available: async () => isMac,
-  async sample(): Promise<Observation[]> {
-    const result = await runCapture("osascript", ["-e", CALENDAR_SCRIPT], CALENDAR_TIMEOUT_MS);
-    lastCalendarDiagnostic = calendarDiagnosticFromResult(result);
-    if (lastCalendarDiagnostic || !result?.stdout) return [];
+export function createCalendarSensor(
+  overrides: Partial<CalendarSensorDependencies> = {},
+): Sensor {
+  const dependencies: CalendarSensorDependencies = {
+    isMac,
+    policyEnabled: () => policyEnabled("calendar"),
+    runCommand: runCapture,
+    now: () => new Date(),
+    ...overrides,
+  };
+  let diagnostic: SensorDiagnostic | null = null;
 
-    const fields = parseCalendarProbe(result.stdout);
-    if (!fields) {
-      lastCalendarDiagnostic = {
-        reason: "calendar_parse_failed",
-        detail: "Calendar query returned an unexpected response.",
-        fixHint: "Run sense-mcp doctor and report the Calendar diagnostic if this persists.",
-      };
-      return [];
-    }
-    lastCalendarDiagnostic = null;
+  return {
+    name: "calendar",
+    intervalMs: 60_000,
+    tier: 2,
+    capability: "calendar",
+    domains: ["schedule"],
+    samplingMode: "on_demand",
+    async available(signal): Promise<boolean> {
+      if (!dependencies.isMac) return false;
+      if (!(await dependencies.policyEnabled())) {
+        diagnostic = disabledDiagnostic();
+        return false;
+      }
+      const executable = await resolveIcalBuddy(dependencies, signal);
+      diagnostic = executable ? null : missingProviderDiagnostic();
+      return Boolean(executable);
+    },
+    async sample(signal): Promise<Observation[]> {
+      if (!(await dependencies.policyEnabled())) {
+        diagnostic = disabledDiagnostic();
+        return [];
+      }
+      const executable = await resolveIcalBuddy(dependencies, signal);
+      if (!executable) {
+        diagnostic = missingProviderDiagnostic();
+        return [];
+      }
 
-    return [
-      {
-        sensor: "calendar",
-        domain: "schedule",
-        fields,
-        observedAt: Date.now(),
-        ttlMs: TTL_MS,
-      },
-    ];
-  },
-  diagnose: () => lastCalendarDiagnostic,
-};
+      const now = dependencies.now();
+      const in15 = new Date(now.getTime() + 15 * 60_000);
+      const currentCommand = "eventsNow";
+      const soonCommand = `eventsFrom:${formatLocalDate(now)} to:${formatLocalDate(in15)}`;
+      const [current, soon] = await Promise.all([
+        dependencies.runCommand(executable, eventQueryArgs(currentCommand), CALENDAR_TIMEOUT_MS, signal),
+        dependencies.runCommand(executable, eventQueryArgs(soonCommand), CALENDAR_TIMEOUT_MS, signal),
+      ]);
+      diagnostic = queryDiagnostic(current) ?? queryDiagnostic(soon);
+      if (diagnostic) return [];
+
+      let window: "current" | "within_15" | "within_45" | "none";
+      if (containsEvent(current)) {
+        window = "current";
+      } else if (containsEvent(soon)) {
+        window = "within_15";
+      } else {
+        const in45 = new Date(now.getTime() + 45 * 60_000);
+        const laterCommand = `eventsFrom:${formatLocalDate(in15)} to:${formatLocalDate(in45)}`;
+        const later = await dependencies.runCommand(
+          executable,
+          eventQueryArgs(laterCommand),
+          CALENDAR_TIMEOUT_MS,
+          signal,
+        );
+        diagnostic = queryDiagnostic(later);
+        if (diagnostic) return [];
+        window = containsEvent(later) ? "within_45" : "none";
+      }
+
+      diagnostic = null;
+      return [
+        {
+          sensor: "calendar",
+          domain: "schedule",
+          fields: classifyCalendarWindow(window),
+          observedAt: Date.now(),
+          ttlMs: TTL_MS,
+        },
+      ];
+    },
+    diagnose: () => diagnostic,
+  };
+}
+
+/** Coarse, opt-in schedule pressure from a headless helper. */
+export const calendarSensor = createCalendarSensor();

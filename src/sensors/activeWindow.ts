@@ -1,11 +1,9 @@
 import type { Observation, Sensor } from "../types.js";
 import { isMac, run } from "./exec.js";
 import { classifyWindowLabel, classifyWindowSensitivity, redactTitle } from "../redact.js";
+import { policyEnabled } from "../policy.js";
 
 const TTL_MS = 15_000;
-
-/** Tier 3, opt-in: include the (redacted) raw window title. Off by default. */
-const RAW_TITLES = process.env.SENSE_RAW_TITLES === "1";
 
 const ACTIVITY_BY_APP: Record<string, string> = {
   Code: "coding",
@@ -50,43 +48,61 @@ end tell`;
 
 /**
  * Frontmost app + activity class + a privacy-safe window label via macOS
- * System Events. The raw window title is read locally only to classify it;
- * it never crosses the MCP boundary unless SENSE_RAW_TITLES=1 (Tier 3), and
- * even then it is redacted first.
+ * System Events. Raw window-title acquisition is skipped entirely unless the
+ * central Tier-3 policy enables it; enabled titles are redacted before output.
  */
-export const activeWindowSensor: Sensor = {
-  name: "active-window",
-  intervalMs: 5_000,
-  tier: 1,
-  capability: "screen_activity",
-  available: async () => isMac,
-  async sample(): Promise<Observation[]> {
-    const app = await run("osascript", ["-e", FRONTMOST_SCRIPT]);
-    if (!app) return [];
+export interface ActiveWindowDependencies {
+  isMac: boolean;
+  runCommand: typeof run;
+  rawTitlesEnabled: () => Promise<boolean>;
+}
 
-    const activityClass = ACTIVITY_BY_APP[app] ?? "unknown";
-    const title = await run("osascript", ["-e", TITLE_SCRIPT]);
-
-    const label = classifyWindowLabel(activityClass, title ?? undefined);
-    const sensitivity = classifyWindowSensitivity(label);
-
-    const fields: Record<string, string> = {
-      active_app: app,
-      activity_class: activityClass,
-      active_window_label: label,
-      sensitivity_level: sensitivity.level,
-    };
-    if (sensitivity.reason) fields.sensitivity_reason = sensitivity.reason;
-    if (RAW_TITLES && title) fields.active_window_title = redactTitle(title);
-
-    return [
-      {
-        sensor: "active-window",
-        domain: "screen",
-        fields,
-        observedAt: Date.now(),
-        ttlMs: TTL_MS,
-      },
-    ];
+export function createActiveWindowSensor(
+  dependencies: ActiveWindowDependencies = {
+    isMac,
+    runCommand: run,
+    rawTitlesEnabled: () => policyEnabled("raw_titles"),
   },
-};
+): Sensor {
+  return {
+    name: "active-window",
+    intervalMs: 5_000,
+    tier: 1,
+    domains: ["screen"],
+    capability: "screen_activity",
+    available: async () => dependencies.isMac,
+    async sample(signal): Promise<Observation[]> {
+      const app = await dependencies.runCommand("osascript", ["-e", FRONTMOST_SCRIPT], 3000, signal);
+      if (!app) return [];
+
+      const rawTitles = await dependencies.rawTitlesEnabled();
+      const title = rawTitles
+        ? await dependencies.runCommand("osascript", ["-e", TITLE_SCRIPT], 3000, signal)
+        : null;
+      const activityClass = ACTIVITY_BY_APP[app] ?? "unknown";
+      const label = classifyWindowLabel(activityClass, title ?? undefined);
+      const sensitivity = classifyWindowSensitivity(label);
+
+      const fields: Record<string, string> = {
+        active_app: app,
+        activity_class: activityClass,
+        active_window_label: label,
+        sensitivity_level: sensitivity.level,
+      };
+      if (sensitivity.reason) fields.sensitivity_reason = sensitivity.reason;
+      if (rawTitles && title) fields.active_window_title = redactTitle(title);
+
+      return [
+        {
+          sensor: "active-window",
+          domain: "screen",
+          fields,
+          observedAt: Date.now(),
+          ttlMs: TTL_MS,
+        },
+      ];
+    },
+  };
+}
+
+export const activeWindowSensor = createActiveWindowSensor();

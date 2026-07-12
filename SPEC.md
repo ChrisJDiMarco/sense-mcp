@@ -2,7 +2,7 @@
 
 A **ContextFrame** is a small, normalized JSON document describing a human's
 current situation, assembled on demand from local sensors. It is the unit of
-exchange between a presence daemon and an AI client.
+exchange between a per-user context broker and an AI client.
 
 > AI should understand your moment, not surveil your life.
 
@@ -14,13 +14,14 @@ Design invariants:
    `"noisy"`, `"in_meeting"`), never images, audio, or keystroke content.
    Raw media, if implemented, MUST live behind a separate explicit tool and
    MUST NOT be part of a ContextFrame.
-3. **Pull-based.** Frames are produced when a client asks. Sensors may sample
-   continuously, but nothing is pushed or uploaded.
+3. **Pull-based delivery.** Frames are produced when a client asks. One local
+   per-user broker may maintain short-lived sensor state while adapters are
+   connected, but nothing is pushed to a client.
 4. **Degrade gracefully.** Every field is optional. A frame with one sensor's
    data is valid. Missing means unknown, not false.
 5. **Consent is tiered and legible.** Capability comes in numbered tiers the
    user opts into. A frame declares its tier and per-capability status, so a
-   client can distinguish *denied* from *unavailable* from *unknown*.
+   client can distinguish consent status from operational health.
 
 ## Privacy tiers
 
@@ -29,7 +30,7 @@ Design invariants:
 | 0 | Clock | local time, day segment, user-set mode | none (pure) |
 | 1 | Activity | active app, activity class, window label, idle/presence, power, device/workspace state | OS APIs, no content capture |
 | 2 | Surroundings | calendar/meeting state, noise *level* class, location *class*, media state, light/weather/health bridges | calendar, mic level (never audio content), coarse location |
-| 3 | Attention | camera availability/snapshot consent, camera-derived discrete attention states, raw window titles (redacted) | camera explicit snapshot or on-device inference only |
+| 3 | Attention | snapshot consent, camera-derived discrete attention states, raw window titles (redacted) | explicit capture or on-device inference only; no background camera enumeration |
 
 Tiers are cumulative. Tier 0 MUST work with zero permissions. Tier 3 frame
 sensors MUST emit only discrete enum states — never images, embeddings,
@@ -114,34 +115,52 @@ Stability enum: `stable` | `recent_transition` | `unknown`.
   "tier": 1,
   "capabilities": {
     "screen_activity": "granted",
-    "calendar": "unavailable",
+    "calendar": "denied",
     "location_class": "granted",
     "microphone_level": "denied",
     "camera_snapshot": "denied",
-    "camera_attention": "denied",
+    "camera_attention": "unavailable",
     "raw_window_titles": "denied"
+  },
+  "capability_states": {
+    "screen_activity": "healthy",
+    "calendar": "disabled",
+    "location_class": "healthy",
+    "microphone_level": "disabled",
+    "camera_snapshot": "disabled",
+    "camera_attention": "unavailable",
+    "raw_window_titles": "disabled"
   },
   "capability_details": {
     "calendar": {
       "sensor": "calendar",
-      "reason": "calendar_query_timeout",
-      "detail": "Calendar query exceeded 8 seconds.",
-      "fix_hint": "Open Calendar once and check macOS Automation/Calendar permissions for the app running Sense."
+      "state": "disabled",
+      "reason": "disabled_by_policy",
+      "detail": "Calendar access is disabled by central Sense policy.",
+      "fix_hint": "Install icalBuddy and run sense-mcp enable calendar."
     }
   }
 }
 ```
 
 Capability status enum: `granted` | `denied` | `unavailable`.
-`denied` = the user said no. `unavailable` = no sensor on this platform.
+`denied` is a compatibility umbrella for access that is disabled by policy or
+denied by the operating system; inspect `capability_states` to distinguish
+`disabled` from `permission_denied`. `unavailable` = no sensor on this platform.
 This lets a client read `"attention": absent` correctly: at
 `camera_attention: "denied"` the right behavior is *don't ask, don't infer*,
 not "data missing, try harder."
 
-`capability_details` is optional diagnostic metadata for unavailable or denied
-capabilities. It lets clients explain missing context without guessing, for
-example `disabled_by_env`, `missing_focus_bridge`,
-`calendar_query_timeout`, or `ambient_light_not_exposed`.
+Operational state enum: `disabled` | `unavailable` | `permission_denied` |
+`no_signal` | `degraded` | `stale` | `healthy`. Compatibility status remains
+stable for existing clients. `capability_states` explains whether a capability
+is producing useful data.
+
+`capability_details` is optional diagnostic metadata for any non-healthy
+operational state. It lets clients explain missing context without guessing,
+for example `disabled_by_policy`, `headless_calendar_provider_missing`,
+`missing_focus_bridge`, or
+`ambient_light_not_exposed`.
 
 Numeric confidence scores are deliberately excluded from v0.2: no current sensor
 produces calibrated probabilities, and uncalibrated numbers are worse than none.
@@ -257,7 +276,6 @@ NOT imply an image was captured.
 ```json
 {
   "in_meeting": false,
-  "next_event_label": "calendar event",
   "next_event_minutes": 18,
   "time_pressure": "moderate"
 }
@@ -265,8 +283,10 @@ NOT imply an image was captured.
 
 `time_pressure`: `none` | `moderate` | `high` — derived
 (e.g., event within 15 min ⇒ `high`).
-Event labels SHOULD default to generic labels such as `"calendar event"` unless
-the user has explicitly opted into event title exposure.
+
+Local Calendar acquisition MUST be policy-gated and headless. The Sense
+implementation uses optional `icalBuddy` and MUST NOT activate or launch a GUI
+calendar application.
 
 ## Relevance router
 
@@ -278,8 +298,8 @@ does not capture media. It classifies the current request and returns:
 - `confidence`: `high` | `medium` | `low`.
 - `minimum_tool`: the smallest tool that should be sufficient, or `none`.
 - `relevant_domains`: the smallest ContextFrame domains likely needed.
-- `recommended_tools`: explicit follow-up tools such as `take_camera_snapshot`
-  or `take_screen_snapshot`.
+- `recommended_tools`: explicit follow-up tools such as `take_camera_snapshot`,
+  `take_window_snapshot`, or `take_full_screen_snapshot`.
 - `avoided_tools`: tools that should not be called for this request.
 - `fallbacks`: what to do if the recommended tool is denied or unavailable.
 - `privacy_notes`: constraints the client should preserve in its answer.
@@ -299,7 +319,7 @@ Example `context_plan`:
   "include_frame": true,
   "include_situation": true,
   "included_context": ["schedule_domain", "user_domain", "get_schedule_context"],
-  "excluded_context": ["camera_snapshot", "screen_snapshot"],
+  "excluded_context": ["camera_snapshot", "window_snapshot", "full_screen_snapshot"],
   "external_context_needed": ["calendar_connector"],
   "reason": "Schedule timing can change the recommendation; account calendar data may need a connector."
 }
@@ -307,8 +327,10 @@ Example `context_plan`:
 
 `expected_value` is `none` | `low` | `medium` | `high`. Clients SHOULD treat
 `none` plus `plan_only: true` as an instruction to answer normally without
-pulling a ContextFrame. `budget.max_tokens` is a hint for the textual context
-budget, not a hard protocol limit.
+pulling a ContextFrame. `context_plan.budget.max_tokens` describes routing
+intent. Context tool input `max_tokens` sets a hard complete-response byte
+ceiling at three serialized bytes per estimated token. Exact model tokenization
+can differ.
 
 Clients SHOULD use this before guessing whether camera, screen, schedule, or
 environment tools are appropriate.
@@ -341,23 +363,34 @@ local, bounded, and user-inspectable, and it SHOULD allow disabling.
 
 ## Explicit snapshot tools
 
-Implementations MAY expose separate `take_camera_snapshot` and
-`take_screen_snapshot` tools. These tools are outside the ContextFrame envelope
-and MUST follow these rules:
+Implementations MAY expose `take_camera_snapshot`, `take_window_snapshot`, and
+`take_full_screen_snapshot`. A deprecated `take_screen_snapshot` alias MAY be
+retained only if it remains window-only. These tools are outside the
+ContextFrame envelope and MUST follow these rules:
 
 1. It is disabled unless the user explicitly opts in.
 2. It MUST require a current-reason argument explaining why the user request is
    visual.
 3. It MUST NOT be called for general context, proactive suggestions, or
    non-visual tasks.
-4. It MUST NOT write images to persistent storage unless the user asks for a
+4. Immediately before acquisition, it MUST obtain and consume a local,
+   short-lived, single-use consent receipt bound to media kind, scope, target,
+   normalized reason, and expiry. A mismatch or prompt failure MUST stop the
+   capture. It MUST recheck the capability policy after consent and before
+   acquisition. A caller-supplied app-window id MUST be validated as an
+   on-screen normal window, and consent MUST identify and bind its owner app
+   and process so an opaque or recycled id cannot silently widen the target.
+5. Window capture SHOULD be the default screen operation and SHOULD NOT activate
+   the target app. Full-screen capture MUST be a distinct operation with an
+   explicit full-screen confirmation.
+6. It MUST NOT write images to persistent storage unless the user asks for a
    saved artifact. It MAY write a private temporary image file when needed for a
    local client to inspect pixels, provided the path is returned to the client
    and stale files are cleaned up.
-5. It SHOULD return structured metadata (`generated_at`, `device_label`,
+7. It SHOULD return structured metadata (`generated_at`, `device_label`,
    `snapshot_path`, `error`, `fix_hint`) and, on success, one image content
    block.
-6. It SHOULD include a mode such as `appearance_check`, `hair_check`,
+8. It SHOULD include a mode such as `appearance_check`, `hair_check`,
    `lighting_check`, `screen_debug`, or `ui_feedback` so the client answers with
    the right level of detail.
 
@@ -392,8 +425,8 @@ derivations as ground truth.
 | Class | Meaning | Examples | Client guidance |
 |---|---|---|---|
 | **observed** | Direct measurement | `idle_seconds`, `active_app`, `local_time`, `in_meeting` | Treat as fact (subject to staleness). |
-| **classified** | Local model/heuristic mapping of an observation | `activity_class`, `noise_class`, `location_class`, `attention`, `active_window_label` | Treat as probable; phrase accordingly. |
-| **derived** | Computed from multiple fields by rule | `time_pressure`, `assistive_posture`, `input_cadence` | Treat as a hint; never as justification for irreversible action. |
+| **classified** | Local model/heuristic mapping of an observation | `activity_class`, `input_cadence`, `noise_class`, `location_class`, `attention`, `active_window_label` | Treat as probable; phrase accordingly. |
+| **derived** | Computed from multiple fields by rule | `time_pressure`, `assistive_posture` | Treat as a hint; never as justification for irreversible action. |
 | **summary** | Natural-language distillation | `screen.summary` | Treat as lossy narrative, not source data. |
 
 Implementations SHOULD expose this classification in `quality.fields` when
@@ -403,8 +436,8 @@ be treated as hints.
 
 ## Observations (internal model)
 
-Sensors emit **observations**; the daemon merges live observations into a
-frame.
+Sensors emit **observations**; the per-user broker merges live observations
+into a frame.
 
 ```json
 {
@@ -416,8 +449,10 @@ frame.
 }
 ```
 
-An observation past its TTL is dead and MUST be dropped. Later observations
-from the same sensor replace earlier ones, field-wise within their domain.
+An observation past its TTL is dead and MUST be dropped. State is keyed by
+sensor and domain. Each field keeps its own expiry, so a partial update cannot
+extend an older field. Context providers MAY refresh only requested domains
+with `cached`, `if_stale`, or `force` behavior.
 
 ## Client behavior guide (normative)
 
@@ -426,8 +461,9 @@ from the same sensor replace earlier ones, field-wise within their domain.
    Figma…") unless it materially helps; ambient awareness should feel like
    good judgment, not surveillance narration.
 3. Respect `assistive_posture` for proactive behavior only.
-4. Treat `denied` capabilities as a user decision — do not probe or infer
-   around them.
+4. Treat `denied` capabilities as not authorized for acquisition — do not probe
+   or infer around them. Inspect `capability_states` before explaining whether
+   policy or an OS permission is responsible.
 5. Do not store frames. If conversation memory persists, persist conclusions
    ("user was heads-down before a deadline"), not frames.
 
@@ -435,8 +471,9 @@ from the same sensor replace earlier ones, field-wise within their domain.
 
 An implementation is conformant if it: produces valid envelopes; declares
 `privacy.tier` and capability statuses truthfully; enforces TTL expiry; never
-writes raw sensor data to durable storage; never transmits raw sensor data
-off-device; emits only enum states from Tier-3 sensors; redacts raw window
+writes raw sensor data to durable storage; makes no hidden network call during
+sensor acquisition; discloses that MCP clients may forward returned results to
+a model provider; emits only enum states from Tier-3 sensors; redacts raw window
 titles when that capability is granted; treats all optional fields as optional
 on read.
 
@@ -450,6 +487,10 @@ on read.
   (spec invariants, not data), separate `derived` wire block (flat format wins).
 - **0.2 broker addendum** — Added optional `situation`, `context_plan`, and a
   metadata-only local access ledger.
+- **0.2 hardening addendum** — Added shared broker lifecycle, field-level
+  expiry, domain refresh, operational capability states, response byte
+  ceilings, window-first capture, exact local media consent, and the
+  client/provider egress boundary.
 - **0.1** — Initial draft.
 
 ---

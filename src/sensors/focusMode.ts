@@ -2,7 +2,6 @@ import type { Observation, Sensor, SensorDiagnostic } from "../types.js";
 import { isMac, runCapture } from "./exec.js";
 
 const TTL_MS = 30_000;
-const SHORTCUT_NAME = process.env.SENSE_FOCUS_SHORTCUT ?? "Sense Current Focus";
 let lastFocusDiagnostic: SensorDiagnostic | null = null;
 
 function normalizeMode(value: string): string {
@@ -31,21 +30,23 @@ export const focusModeSensor: Sensor = {
   name: "focus-mode",
   intervalMs: 30_000,
   tier: 2,
+  domains: ["user"],
   capability: "focus_mode",
-  available: async () => isMac || Boolean(process.env.SENSE_FOCUS_MODE),
-  async sample(): Promise<Observation[]> {
+  available: async () => Boolean(process.env.SENSE_FOCUS_MODE || (isMac && process.env.SENSE_FOCUS_SHORTCUT)),
+  async sample(signal): Promise<Observation[]> {
     const manual = process.env.SENSE_FOCUS_MODE;
+    const shortcutName = process.env.SENSE_FOCUS_SHORTCUT;
     let mode = manual;
-    if (!mode && isMac) {
-      const result = await runCapture("shortcuts", ["run", SHORTCUT_NAME], 3000);
+    if (!mode && isMac && shortcutName) {
+      const result = await runCapture("shortcuts", ["run", shortcutName], 3000, signal);
       if (result && result.exitCode === 0 && result.stdout) {
         mode = result.stdout;
       } else {
         lastFocusDiagnostic = {
           reason: "missing_focus_bridge",
-          detail: `No SENSE_FOCUS_MODE env value and Shortcut "${SHORTCUT_NAME}" did not return a mode.`,
+          detail: `Configured Shortcut "${shortcutName}" did not return a focus mode.`,
           fixHint:
-            "Set SENSE_FOCUS_MODE=deep_work or create a macOS Shortcut named Sense Current Focus that returns text.",
+            "Set SENSE_FOCUS_MODE=deep_work or verify SENSE_FOCUS_SHORTCUT names a Shortcut that returns text.",
         };
         return [];
       }

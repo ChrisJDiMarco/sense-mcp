@@ -1,9 +1,13 @@
-import type { Observation, Sensor } from "../types.js";
-import { isMac, runBuffer, runCapture } from "./exec.js";
+import type { CaptureConsentRequest, ConsentDecision } from "../consent.js";
+import { consumeConsentReceipt, requestLocalConsent } from "../consent.js";
+import { policyEnabled } from "../policy.js";
+import { removePrivateFile } from "../privateFiles.js";
 import {
   persistSnapshotBuffer as persistSnapshotFileBuffer,
   type PersistedSnapshot,
 } from "../snapshotFiles.js";
+import type { Observation, Sensor, SensorDiagnostic } from "../types.js";
+import { isMac, runBuffer, runCapture, type CommandResult } from "./exec.js";
 
 const TTL_MS = 120_000;
 
@@ -32,6 +36,17 @@ export interface CameraSnapshot {
   size_bytes?: number;
   device_label?: string;
   error?: string;
+}
+
+interface CameraCaptureDependencies {
+  isMac: boolean;
+  policyEnabled: () => Promise<boolean>;
+  requestConsent: (request: CaptureConsentRequest) => Promise<ConsentDecision>;
+  consumeConsent: (id: string, request: CaptureConsentRequest) => Promise<ConsentDecision>;
+  listDevices: (signal?: AbortSignal) => Promise<CameraDevice[]>;
+  captureBuffer: (deviceIndex: number, signal?: AbortSignal) => Promise<Buffer | null>;
+  persist: (buffer: Buffer, generatedAt: string) => Promise<PersistedSnapshot>;
+  cleanup: (file: string) => Promise<unknown>;
 }
 
 function classifyCameraLabel(raw: string): string {
@@ -69,53 +84,19 @@ export function parseAvfoundationDevices(output: string): CameraDevice[] {
   return devices;
 }
 
-async function listCameraDevices(): Promise<CameraDevice[]> {
+async function listCameraDevices(signal?: AbortSignal): Promise<CameraDevice[]> {
   const result = await runCapture(
     "ffmpeg",
     ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
-    5000,
+    5_000,
+    signal,
   );
   if (!result) return [];
   return parseAvfoundationDevices(`${result.stdout}\n${result.stderr}`);
 }
 
-export function cameraSnapshotEnabled(): boolean {
-  return process.env.SENSE_CAMERA_SNAPSHOT === "1";
-}
-
-export async function persistSnapshotBuffer(
-  buffer: Buffer,
-  generatedAt: string,
-): Promise<PersistedSnapshot> {
-  return persistSnapshotFileBuffer("camera", buffer, generatedAt);
-}
-
-export async function takeCameraSnapshot(
-  deviceIndex = 0,
-  mode: CameraSnapshotMode = "general_visual",
-): Promise<CameraSnapshot> {
-  const generatedAt = new Date().toISOString();
-  if (!cameraSnapshotEnabled()) {
-    return {
-      ok: false,
-      generated_at: generatedAt,
-      mode,
-      error: "camera_snapshot_not_enabled",
-    };
-  }
-
-  const devices = await listCameraDevices();
-  const selected = devices.find((device) => device.index === deviceIndex) ?? devices[0];
-  if (!selected) {
-    return {
-      ok: false,
-      generated_at: generatedAt,
-      mode,
-      error: "camera_unavailable",
-    };
-  }
-
-  const buffer = await runBuffer(
+async function captureCameraBuffer(deviceIndex: number, signal?: AbortSignal): Promise<Buffer | null> {
+  return runBuffer(
     "ffmpeg",
     [
       "-hide_banner",
@@ -126,7 +107,7 @@ export async function takeCameraSnapshot(
       "-framerate",
       "30",
       "-i",
-      `${selected.index}:none`,
+      `${deviceIndex}:none`,
       "-frames:v",
       "1",
       "-f",
@@ -135,55 +116,170 @@ export async function takeCameraSnapshot(
       "png",
       "-",
     ],
-    8000,
+    8_000,
+    8 * 1024 * 1024,
+    signal,
   );
+}
 
-  if (!buffer) {
+export async function cameraSnapshotEnabled(): Promise<boolean> {
+  return isMac && policyEnabled("camera_snapshot");
+}
+
+export async function persistSnapshotBuffer(
+  buffer: Buffer,
+  generatedAt: string,
+): Promise<PersistedSnapshot> {
+  return persistSnapshotFileBuffer("camera", buffer, generatedAt);
+}
+
+function consentError(decision: Extract<ConsentDecision, { granted: false }>): string {
+  return `camera_consent_${decision.error}`;
+}
+
+export function createCameraSnapshotCapture(
+  overrides: Partial<CameraCaptureDependencies> = {},
+): (
+  deviceIndex?: number,
+  mode?: CameraSnapshotMode,
+  reason?: string,
+  signal?: AbortSignal,
+) => Promise<CameraSnapshot> {
+  const dependencies: CameraCaptureDependencies = {
+    isMac,
+    policyEnabled: () => policyEnabled("camera_snapshot"),
+    requestConsent: requestLocalConsent,
+    consumeConsent: consumeConsentReceipt,
+    listDevices: listCameraDevices,
+    captureBuffer: captureCameraBuffer,
+    persist: persistSnapshotBuffer,
+    cleanup: removePrivateFile,
+    ...overrides,
+  };
+
+  return async (
+    deviceIndex = 0,
+    mode: CameraSnapshotMode = "general_visual",
+    reason = "Explicit camera snapshot requested by the local user.",
+    signal?: AbortSignal,
+  ): Promise<CameraSnapshot> => {
+    const generatedAt = new Date().toISOString();
+    if (!dependencies.isMac || !(await dependencies.policyEnabled())) {
+      return { ok: false, generated_at: generatedAt, mode, error: "camera_snapshot_not_enabled" };
+    }
+
+    const consentRequest: CaptureConsentRequest = {
+      media_kind: "camera",
+      scope: "single_capture",
+      target: `device:${deviceIndex}`,
+      reason,
+    };
+    const consent = await dependencies.requestConsent(consentRequest);
+    if (!consent.granted) {
+      return { ok: false, generated_at: generatedAt, mode, error: consentError(consent) };
+    }
+    const consumed = await dependencies.consumeConsent(consent.receipt.id, consentRequest);
+    if (!consumed.granted) {
+      return { ok: false, generated_at: generatedAt, mode, error: consentError(consumed) };
+    }
+    if (!(await dependencies.policyEnabled())) {
+      return { ok: false, generated_at: generatedAt, mode, error: "camera_policy_revoked" };
+    }
+
+    // The receipt is consumed before camera enumeration or capture. The exact
+    // device in the prompt is the only device Sense will open.
+    const devices = await dependencies.listDevices(signal);
+    const selected = devices.find((device) => device.index === deviceIndex);
+    if (!selected) {
+      return { ok: false, generated_at: generatedAt, mode, error: "camera_unavailable" };
+    }
+    if (!(await dependencies.policyEnabled())) {
+      return { ok: false, generated_at: generatedAt, mode, error: "camera_policy_revoked" };
+    }
+
+    const buffer = await dependencies.captureBuffer(selected.index, signal);
+    if (!buffer) {
+      return {
+        ok: false,
+        generated_at: generatedAt,
+        mode,
+        device_label: selected.label,
+        error: "camera_capture_failed_or_denied",
+      };
+    }
+    if (!(await dependencies.policyEnabled())) {
+      return { ok: false, generated_at: generatedAt, mode, error: "camera_policy_revoked" };
+    }
+
+    const persisted = await dependencies.persist(buffer, generatedAt);
+    if (!(await dependencies.policyEnabled().catch(() => false))) {
+      await dependencies.cleanup(persisted.path).catch(() => undefined);
+      return { ok: false, generated_at: generatedAt, mode, error: "camera_policy_revoked" };
+    }
     return {
-      ok: false,
+      ok: true,
       generated_at: generatedAt,
       mode,
+      mimeType: "image/png",
+      data: buffer.toString("base64"),
+      ...persisted,
       device_label: selected.label,
-      error: "camera_capture_failed_or_denied",
     };
-  }
-
-  const persisted = await persistSnapshotBuffer(buffer, generatedAt);
-
-  return {
-    ok: true,
-    generated_at: generatedAt,
-    mode,
-    mimeType: "image/png",
-    data: buffer.toString("base64"),
-    ...persisted,
-    device_label: selected.label,
   };
 }
 
-/** Camera availability only. The actual image capture is an explicit MCP tool. */
-export const cameraSensor: Sensor = {
-  name: "camera",
-  intervalMs: 120_000,
-  tier: 3,
-  capability: "camera_snapshot",
-  available: async () => isMac,
-  async sample(): Promise<Observation[]> {
-    const devices = await listCameraDevices();
-    if (devices.length === 0) return [];
+export const takeCameraSnapshot = createCameraSnapshotCapture();
 
-    return [
-      {
-        sensor: "camera",
-        domain: "environment",
-        fields: {
-          camera_available: true,
-          camera_device_count: devices.length,
-          camera_default_label: devices[0].label,
+export function createCameraSensor(
+  overrides: {
+    isMac?: boolean;
+    policyEnabled?: () => Promise<boolean>;
+  } = {},
+): Sensor {
+  const platformIsMac = overrides.isMac ?? isMac;
+  const enabled = overrides.policyEnabled ?? (() => policyEnabled("camera_snapshot"));
+  let diagnostic: SensorDiagnostic | null = null;
+  return {
+    name: "camera",
+    intervalMs: 120_000,
+    tier: 3,
+    capability: "camera_snapshot",
+    domains: ["environment"],
+    samplingMode: "on_demand",
+    async available(): Promise<boolean> {
+      const allowed = platformIsMac && (await enabled());
+      diagnostic = allowed
+        ? null
+        : {
+            reason: "disabled_by_policy",
+            detail: "Camera capture is disabled in the Sense policy.",
+            fixHint: "Run sense-mcp enable camera to permit allow-once prompts.",
+          };
+      return allowed;
+    },
+    async sample(): Promise<Observation[]> {
+      if (!(await enabled())) {
+        diagnostic = {
+          reason: "disabled_by_policy",
+          detail: "Camera capture is disabled in the Sense policy.",
+          fixHint: "Run sense-mcp enable camera to permit allow-once prompts.",
+        };
+        return [];
+      }
+      diagnostic = null;
+      return [
+        {
+          sensor: "camera",
+          domain: "environment",
+          fields: { camera_capture_enabled: true, camera_requires_local_consent: true },
+          observedAt: Date.now(),
+          ttlMs: TTL_MS,
         },
-        observedAt: Date.now(),
-        ttlMs: TTL_MS,
-      },
-    ];
-  },
-};
+      ];
+    },
+    diagnose: () => diagnostic,
+  };
+}
+
+/** Policy availability only. Hardware opens only inside the explicit capture tool. */
+export const cameraSensor = createCameraSensor();

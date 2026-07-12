@@ -1,23 +1,57 @@
-import { randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { constants } from "node:fs";
+import {
+  createServer,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type OutgoingHttpHeaders,
+  type ServerResponse,
+} from "node:http";
+import { open, readdir, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseSenseEnvFromToml, setSenseEnvInToml } from "./cli.js";
 import {
   iphoneContextPath,
-  sanitizeIphoneContextPayload,
+  readActiveIphoneContextPayload,
   writeIphoneContextPayload,
   type IphoneContextPayload,
 } from "./iphoneContext.js";
 import { ledgerPath, readAccessLedger, recordAccess, type AccessLedgerEntry } from "./ledger.js";
+import { startLanIphoneBridge, type LanBridgeState } from "./lanBridge.js";
+import { BrokerClient, defaultBrokerSocketPath } from "./broker.js";
+import type { ContextResult } from "./contextProvider.js";
+import {
+  POLICY_KEYS,
+  SensePolicyStore,
+  policyPath,
+  type PolicyKey,
+  type PolicySnapshot,
+} from "./policy.js";
 import { planRelevantContext } from "./relevance.js";
+import { sensors } from "./sensors/index.js";
+import type { CapabilityOperationalState, Sensor } from "./types.js";
+import { atomicWritePrivateFile, removePrivateFile } from "./privateFiles.js";
+import { removePanelRuntime, writePanelRuntime } from "./panelRuntime.js";
 
 const DEFAULT_CODEX_CONFIG = path.join(os.homedir(), ".codex", "config.toml");
 const DEFAULT_PORT = 3777;
 const MAX_BODY_BYTES = 16 * 1024;
+const MAX_CONFIG_BYTES = 1024 * 1024;
+const PANEL_REQUEST_TIMEOUT_MS = 5_000;
+const PANEL_SESSION_COOKIE = "sense_panel_session";
+const MAX_BOOTSTRAP_BYTES = 512;
+const MAX_LAUNCHER_BYTES = 8 * 1024;
 
-type CapabilityName = "camera" | "screen" | "mic" | "rawTitles" | "workspace";
+type CapabilityName =
+  | "camera"
+  | "window"
+  | "fullScreen"
+  | "mic"
+  | "calendar"
+  | "location"
+  | "rawTitles"
+  | "workspace";
 
 interface CapabilityState {
   label: string;
@@ -28,6 +62,8 @@ interface CapabilityState {
   preview: string;
   agent_sees: string[];
   agent_never_sees: string[];
+  operational_state: string;
+  source: string;
 }
 
 interface SnapshotSummary {
@@ -36,15 +72,49 @@ interface SnapshotSummary {
   path: string;
   size_bytes: number;
   modified_at: string;
+  capture_scope?: "camera" | "window_only" | "full_screen" | "unknown_screen";
 }
 
 interface ToolActivitySummary {
-  tool: "take_camera_snapshot" | "take_screen_snapshot";
+  tool:
+    | "take_camera_snapshot"
+    | "take_window_snapshot"
+    | "take_screen_snapshot"
+    | "take_full_screen_snapshot"
+    | "screen_snapshot_artifact";
   status: "completed";
   observed_at: string;
   artifact_path: string;
   size_bytes: number;
   note: string;
+  capture_scope: "camera" | "window_only" | "full_screen" | "unknown_screen";
+}
+
+interface PolicyOperationalState {
+  state: "enabled" | "disabled" | "error";
+  source: string;
+  detail: string;
+}
+
+interface SensorOperationalState {
+  state:
+    | CapabilityOperationalState
+    | "healthy"
+    | "degraded"
+    | "unavailable"
+    | "not_connected"
+    | "idle_on_demand";
+  sampling_mode: "scheduled" | "on_demand";
+  interval_ms: number;
+  capability?: string;
+  policy_key?: PolicyKey;
+  detail: string;
+}
+
+interface CaptureOperationalState {
+  state: "disabled" | "consent_required";
+  tools: string[];
+  detail: string;
 }
 
 interface MomentChip {
@@ -81,10 +151,21 @@ export interface PanelState {
   capabilities: Record<CapabilityName, CapabilityState>;
   moment: MomentMap;
   trust: {
-    local_only: boolean;
-    pull_based: boolean;
-    background_capture: boolean;
-    snapshots_temporary: boolean;
+    acquisition: "local_devices";
+    delivery: "controlled_by_mcp_client_and_model_provider";
+    semantic_sampling: "scheduled_while_client_connected";
+    media_capture: "explicit_local_consent_only";
+    snapshot_retention: "temporary_local_files";
+  };
+  operational_states: {
+    runtime: {
+      connected: boolean;
+      state: "not_connected" | ContextResult["health"]["status"];
+      source: "none" | ContextResult["health"]["source"];
+    };
+    policy: Record<PolicyKey, PolicyOperationalState>;
+    sensors: Record<string, SensorOperationalState>;
+    captures: Record<"camera_snapshot" | "window_snapshot" | "full_screen_snapshot", CaptureOperationalState>;
   };
   health: {
     enabled_capabilities: number;
@@ -113,16 +194,140 @@ interface IphoneBridgeReceipt {
   iphone_signals: string[];
   accepted_fields: string[];
   accepted_summary: string;
-  path: string;
+  path?: string;
 }
 
-interface LanBridgeState {
-  url: string;
-  token: string;
+const POLICY_ENV: Record<PolicyKey, string> = {
+  calendar: "SENSE_CALENDAR",
+  location: "SENSE_LOCATION",
+  mic_level: "SENSE_MIC_LEVEL",
+  camera_snapshot: "SENSE_CAMERA_SNAPSHOT",
+  window_snapshot: "SENSE_SCREEN_SNAPSHOT",
+  full_screen_snapshot: "SENSE_FULL_SCREEN_SNAPSHOT",
+  raw_titles: "SENSE_RAW_TITLES",
+};
+
+const CAPABILITY_POLICY: Record<Exclude<CapabilityName, "workspace">, PolicyKey> = {
+  camera: "camera_snapshot",
+  window: "window_snapshot",
+  fullScreen: "full_screen_snapshot",
+  mic: "mic_level",
+  calendar: "calendar",
+  location: "location",
+  rawTitles: "raw_titles",
+};
+
+const SENSOR_POLICY: Partial<Record<string, PolicyKey>> = {
+  calendar: "calendar",
+  location: "location",
+  "audio-level": "mic_level",
+  camera: "camera_snapshot",
+};
+
+function panelPolicyFromEnv(env: Record<string, string | undefined>): PolicySnapshot {
+  const values = Object.fromEntries(
+    POLICY_KEYS.map((key) => [key, env[POLICY_ENV[key]] === "1"]),
+  ) as PolicySnapshot["values"];
+  const sources = Object.fromEntries(
+    POLICY_KEYS.map((key) => [
+      key,
+      env[POLICY_ENV[key]] === "0" || env[POLICY_ENV[key]] === "1" ? "environment" : "default",
+    ]),
+  ) as PolicySnapshot["sources"];
+  return {
+    values,
+    sources,
+    path: env.SENSE_POLICY_PATH || policyPath(),
+    valid: true,
+    loaded_at: new Date().toISOString(),
+  };
 }
 
-function boolEnv(env: Record<string, string | undefined>, key: string): boolean {
-  return env[key] === "1";
+function policyOperationalStates(policy: PolicySnapshot): Record<PolicyKey, PolicyOperationalState> {
+  return Object.fromEntries(
+    POLICY_KEYS.map((key) => [
+      key,
+      {
+        state: policy.valid ? (policy.values[key] ? "enabled" : "disabled") : "error",
+        source: policy.sources[key],
+        detail: policy.valid
+          ? `${key} is ${policy.values[key] ? "enabled" : "disabled"} by ${policy.sources[key]} policy.`
+          : policy.error ?? "The policy file is invalid; Sense fails closed.",
+      } satisfies PolicyOperationalState,
+    ]),
+  ) as Record<PolicyKey, PolicyOperationalState>;
+}
+
+function sensorOperationalStates(
+  policy: PolicySnapshot,
+  runtime: ContextResult | undefined,
+): Record<string, SensorOperationalState> {
+  const diagnostics = new Map(runtime?.health.diagnostics.map((item) => [item.component, item]) ?? []);
+  const capabilityStates = runtime?.frame.privacy.capability_states ?? {};
+  return Object.fromEntries(
+    sensors.map((sensor: Sensor) => {
+      const policyKey = SENSOR_POLICY[sensor.name];
+      const diagnostic = diagnostics.get(sensor.name);
+      const samplingMode = sensor.samplingMode === "on_demand" ? "on_demand" : "scheduled";
+      let state: SensorOperationalState["state"];
+      let detail: string;
+      if (policyKey && (!policy.valid || !policy.values[policyKey])) {
+        state = "disabled";
+        detail = `${sensor.name} is disabled by ${policyKey} policy.`;
+      } else if (!runtime) {
+        state = "not_connected";
+        detail = "No running sensor broker was attached when this panel state was generated.";
+      } else if (diagnostic) {
+        state = diagnostic.status;
+        detail = diagnostic.message ?? `${sensor.name} reports ${diagnostic.status}.`;
+      } else if (sensor.samplingMode === "on_demand") {
+        state = "idle_on_demand";
+        detail = "Available for an explicit context refresh; it is not sampled on a timer.";
+      } else {
+        state = sensor.capability
+          ? (capabilityStates[sensor.capability] ?? "healthy")
+          : "healthy";
+        detail = `Semantic sampling may run every ${sensor.intervalMs} ms while an AI client is connected.`;
+      }
+      return [
+        sensor.name,
+        {
+          state,
+          sampling_mode: samplingMode,
+          interval_ms: sensor.intervalMs,
+          capability: sensor.capability,
+          policy_key: policyKey,
+          detail,
+        } satisfies SensorOperationalState,
+      ];
+    }),
+  );
+}
+
+function captureOperationalStates(
+  policy: PolicySnapshot,
+): PanelState["operational_states"]["captures"] {
+  const state = (key: "camera_snapshot" | "window_snapshot" | "full_screen_snapshot") =>
+    policy.valid && policy.values[key] ? "consent_required" : "disabled";
+  return {
+    camera_snapshot: {
+      state: state("camera_snapshot"),
+      tools: ["take_camera_snapshot"],
+      detail: "take_camera_snapshot captures one still image only after an explicit local consent receipt.",
+    },
+    window_snapshot: {
+      state: state("window_snapshot"),
+      tools: ["take_window_snapshot", "take_screen_snapshot"],
+      detail:
+        "take_screen_snapshot is a deprecated window-only alias for take_window_snapshot; neither tool captures the full display.",
+    },
+    full_screen_snapshot: {
+      state: state("full_screen_snapshot"),
+      tools: ["take_full_screen_snapshot"],
+      detail:
+        "take_full_screen_snapshot captures the entire main display and requires explicit full-screen confirmation plus local consent.",
+    },
+  };
 }
 
 function snapshotDir(env: Record<string, string | undefined>): string {
@@ -179,12 +384,7 @@ function iphoneReceipt(payload: IphoneContextPayload): IphoneReceipt {
 }
 
 async function readActiveIphoneContext(file = iphoneContextPath()): Promise<IphoneContextPayload | undefined> {
-  try {
-    const payload = sanitizeIphoneContextPayload(JSON.parse(await readFile(file, "utf8")));
-    return Date.parse(payload.expires_at) > Date.now() ? payload : undefined;
-  } catch {
-    return undefined;
-  }
+  return readActiveIphoneContextPayload(file);
 }
 
 function buildMomentMap(
@@ -198,9 +398,13 @@ function buildMomentMap(
   const lastLedger = ledgerEntries[0];
   const receipt = iphoneContext ? iphoneReceipt(iphoneContext) : undefined;
   const chips: MomentChip[] = [
-    { label: "Privacy", value: "local only", tone: "good" },
-    { label: "Capture", value: "explicit only", tone: "good" },
-    { label: "Enabled", value: `${enabledCount}/5`, tone: enabledCount ? "info" : "muted" },
+    { label: "Acquisition", value: "local Mac", tone: "good" },
+    { label: "Media capture", value: "explicit consent", tone: "good" },
+    {
+      label: "Enabled",
+      value: `${enabledCount}/${Object.keys(capabilities).length}`,
+      tone: enabledCount ? "info" : "muted",
+    },
     {
       label: "iPhone",
       value: receipt ? `${receipt.feeling}, ${receipt.focus} focus` : "no active check-in",
@@ -248,14 +452,60 @@ async function recentSnapshots(dir: string): Promise<SnapshotSummary[]> {
   }
 }
 
-function snapshotToToolActivity(snapshot: SnapshotSummary): ToolActivitySummary {
+function snapshotReceipt(
+  snapshot: SnapshotSummary,
+  ledgerEntries: AccessLedgerEntry[],
+): AccessLedgerEntry | undefined {
+  return ledgerEntries.find(
+    (entry) =>
+      entry.status === "completed" &&
+      entry.media_captured &&
+      entry.artifact_paths?.includes(snapshot.path),
+  );
+}
+
+function snapshotScope(
+  snapshot: SnapshotSummary,
+  receipt: AccessLedgerEntry | undefined,
+): SnapshotSummary["capture_scope"] {
+  if (snapshot.kind === "camera") return "camera";
+  if (receipt?.tool === "take_full_screen_snapshot") return "full_screen";
+  if (receipt?.tool === "take_window_snapshot" || receipt?.tool === "take_screen_snapshot") {
+    return "window_only";
+  }
+  return "unknown_screen";
+}
+
+function snapshotToToolActivity(
+  snapshot: SnapshotSummary,
+  ledgerEntries: AccessLedgerEntry[],
+): ToolActivitySummary {
+  const receipt = snapshotReceipt(snapshot, ledgerEntries);
+  const captureScope = snapshotScope(snapshot, receipt);
+  const tool: ToolActivitySummary["tool"] =
+    snapshot.kind === "camera"
+      ? "take_camera_snapshot"
+      : receipt?.tool === "take_window_snapshot" ||
+          receipt?.tool === "take_screen_snapshot" ||
+          receipt?.tool === "take_full_screen_snapshot"
+        ? receipt.tool
+        : "screen_snapshot_artifact";
+  const note =
+    tool === "take_screen_snapshot"
+      ? "Ledger-attributed deprecated alias capture; this was window-only, not full-screen."
+      : tool === "take_full_screen_snapshot"
+        ? "Ledger-attributed explicit full-screen capture of the main display."
+        : tool === "take_window_snapshot"
+          ? "Ledger-attributed app-window capture."
+          : "Derived from the temporary snapshot artifact; no matching capture receipt was found.";
   return {
-    tool: snapshot.kind === "camera" ? "take_camera_snapshot" : "take_screen_snapshot",
+    tool,
     status: "completed",
     observed_at: snapshot.modified_at,
     artifact_path: snapshot.path,
     size_bytes: snapshot.size_bytes,
-    note: "Derived from the temporary snapshot artifact; no extra audit database is written.",
+    note,
+    capture_scope: captureScope ?? "unknown_screen",
   };
 }
 
@@ -265,43 +515,89 @@ export function sensePanelState(
   configPath = DEFAULT_CODEX_CONFIG,
   ledgerEntries: AccessLedgerEntry[] = [],
   iphoneContext?: IphoneContextPayload,
+  loadedPolicy?: PolicySnapshot,
+  runtime?: ContextResult,
 ): PanelState {
+  const policy = loadedPolicy ?? panelPolicyFromEnv(env);
+  const policyStates = policyOperationalStates(policy);
+  const captureStates = captureOperationalStates(policy);
   const capabilities: PanelState["capabilities"] = {
     camera: {
       label: "Camera Snapshot",
-      enabled: boolEnv(env, "SENSE_CAMERA_SNAPSHOT"),
+      enabled: policy.valid && policy.values.camera_snapshot,
       env: "SENSE_CAMERA_SNAPSHOT",
       description: "One-off webcam snapshot for explicit visual appearance or room requests.",
-      preview: "Returns one temporary PNG path only after an explicit current visual request.",
+      preview: "The still-image tool requires an exact, short-lived local consent receipt.",
       agent_sees: ["temporary image path", "device label", "capture status"],
       agent_never_sees: ["background video", "identity profile", "camera stream"],
+      operational_state: captureStates.camera_snapshot.state,
+      source: policy.sources.camera_snapshot,
     },
-    screen: {
-      label: "Screen Snapshot",
-      enabled: boolEnv(env, "SENSE_SCREEN_SNAPSHOT"),
+    window: {
+      label: "App Window Snapshot",
+      enabled: policy.valid && policy.values.window_snapshot,
       env: "SENSE_SCREEN_SNAPSHOT",
-      description: "One-off screenshot for explicit current-screen or UI/debug requests.",
-      preview: "Returns one temporary screenshot path for current UI/debug questions.",
-      agent_sees: ["temporary screenshot path", "capture status", "requested mode"],
-      agent_never_sees: ["background recording", "keystrokes", "private messages by default"],
+      description: "Captures one identified app window without activating it.",
+      preview: "take_screen_snapshot remains only as a deprecated window-only compatibility alias.",
+      agent_sees: ["one app window image", "window id", "capture status"],
+      agent_never_sees: ["other displays", "background recording", "keystrokes"],
+      operational_state: captureStates.window_snapshot.state,
+      source: policy.sources.window_snapshot,
+    },
+    fullScreen: {
+      label: "Full-Screen Snapshot",
+      enabled: policy.valid && policy.values.full_screen_snapshot,
+      env: "SENSE_FULL_SCREEN_SNAPSHOT",
+      description: "Higher-risk capture of the entire main display.",
+      preview: "Uses take_full_screen_snapshot and requires explicit full-screen confirmation and local consent.",
+      agent_sees: ["entire main display image", "capture status", "requested reason"],
+      agent_never_sees: ["background recording", "keystrokes", "other displays by default"],
+      operational_state: captureStates.full_screen_snapshot.state,
+      source: policy.sources.full_screen_snapshot,
     },
     mic: {
       label: "Mic Level",
-      enabled: boolEnv(env, "SENSE_MIC_LEVEL"),
+      enabled: policy.valid && policy.values.mic_level,
       env: "SENSE_MIC_LEVEL",
-      description: "One-second audio level sampling for noise class only. No audio content.",
-      preview: "Emits noise class and dB level; never transcript or retained audio.",
+      description: "Scheduled one-second audio-level samples while an AI client is connected.",
+      preview: "Emits a noise class and dB level; never transcript or retained audio.",
       agent_sees: ["noise class", "average level", "sample length"],
       agent_never_sees: ["audio recording", "transcript", "speaker identity"],
+      operational_state: policyStates.mic_level.state,
+      source: policy.sources.mic_level,
+    },
+    calendar: {
+      label: "Calendar Availability",
+      enabled: policy.valid && policy.values.calendar,
+      env: "SENSE_CALENDAR",
+      description: "On-demand semantic availability windows from a headless calendar provider.",
+      preview: "Samples only for an explicit schedule-domain refresh; event titles are not emitted.",
+      agent_sees: ["busy/free window", "time until next event", "schedule pressure"],
+      agent_never_sees: ["event titles", "attendees", "notes", "Calendar.app UI"],
+      operational_state: policyStates.calendar.state,
+      source: policy.sources.calendar,
+    },
+    location: {
+      label: "Coarse Location Class",
+      enabled: policy.valid && policy.values.location,
+      env: "SENSE_LOCATION",
+      description: "Scheduled local classification such as home, office, cafe, or unknown.",
+      preview: "The raw network name is used locally for classification and is not emitted.",
+      agent_sees: ["coarse location class"],
+      agent_never_sees: ["raw Wi-Fi name", "GPS coordinates", "network credentials"],
+      operational_state: policyStates.location.state,
+      source: policy.sources.location,
     },
     rawTitles: {
       label: "Raw Window Titles",
-      enabled: boolEnv(env, "SENSE_RAW_TITLES"),
+      enabled: policy.valid && policy.values.raw_titles,
       env: "SENSE_RAW_TITLES",
       description: "Redacted active-window title. Off by default.",
       preview: "Adds redacted title text only when you intentionally opt in.",
       agent_sees: ["redacted title", "privacy-safe label"],
       agent_never_sees: ["unredacted secrets", "message bodies", "credentials"],
+      operational_state: policyStates.raw_titles.state,
+      source: policy.sources.raw_titles,
     },
     workspace: {
       label: "Workspace Context",
@@ -312,17 +608,25 @@ export function sensePanelState(
       preview: "Adds branch, dirty count, scripts, and broad project class for configured roots.",
       agent_sees: ["workspace name", "branch", "dirty count"],
       agent_never_sees: ["file contents", "commit secrets", "unrequested diffs"],
+      operational_state: env.SENSE_WORKSPACE_ROOTS ? "enabled" : "disabled",
+      source: "client configuration",
     },
   };
   const enabledCapabilities = Object.values(capabilities).filter((capability) => capability.enabled)
     .length;
   const recommendations = [
-    ...(capabilities.camera.enabled || capabilities.screen.enabled
-      ? ["Restart your MCP client after changing snapshot permissions."]
-      : ["Camera and screen snapshots are off. Enable only when you need explicit visual help."]),
+    ...(!policy.valid ? [policy.error ?? "Policy is invalid; protected capabilities fail closed."] : []),
+    ...(runtime
+      ? runtime.health.status === "healthy"
+        ? []
+        : [`Sensor broker reports ${runtime.health.status}; inspect the operational states below.`]
+      : ["Sensor broker is not connected; sensor rows are listed as not connected, not healthy."]),
+    ...(capabilities.camera.enabled || capabilities.window.enabled || capabilities.fullScreen.enabled
+      ? []
+      : ["Camera, window, and full-screen capture are disabled by policy."]),
     ...(capabilities.mic.enabled
       ? []
-      : ["Mic noise level is off. Enable mic only if you want ambient noise class in context."]),
+      : ["Mic-level semantic sampling is disabled by policy."]),
     ...(env.SENSE_FOCUS_MODE || env.SENSE_FOCUS_SHORTCUT
       ? []
       : ["Focus mode needs SENSE_FOCUS_MODE or a macOS Shortcut named Sense Current Focus."]),
@@ -331,6 +635,11 @@ export function sensePanelState(
       ? ["Raw titles are on. Keep this disabled unless you truly need redacted titles."]
       : []),
   ];
+  const enrichedSnapshots = snapshots.map((snapshot) => ({
+    ...snapshot,
+    capture_scope: snapshotScope(snapshot, snapshotReceipt(snapshot, ledgerEntries)),
+  }));
+  const sensorStates = sensorOperationalStates(policy, runtime);
 
   return {
     generated_at: new Date().toISOString(),
@@ -339,10 +648,21 @@ export function sensePanelState(
     capabilities,
     moment: buildMomentMap(capabilities, recommendations, snapshots, ledgerEntries, iphoneContext),
     trust: {
-      local_only: true,
-      pull_based: true,
-      background_capture: false,
-      snapshots_temporary: true,
+      acquisition: "local_devices",
+      delivery: "controlled_by_mcp_client_and_model_provider",
+      semantic_sampling: "scheduled_while_client_connected",
+      media_capture: "explicit_local_consent_only",
+      snapshot_retention: "temporary_local_files",
+    },
+    operational_states: {
+      runtime: {
+        connected: Boolean(runtime),
+        state: runtime?.health.status ?? "not_connected",
+        source: runtime?.health.source ?? "none",
+      },
+      policy: policyStates,
+      sensors: sensorStates,
+      captures: captureStates,
     },
     health: {
       enabled_capabilities: enabledCapabilities,
@@ -351,13 +671,14 @@ export function sensePanelState(
       doctor_command: "sense-mcp doctor",
       recommendations,
     },
-    recent_tool_activity: snapshots.map(snapshotToToolActivity),
-    recent_snapshots: snapshots,
+    recent_tool_activity: snapshots.map((snapshot) => snapshotToToolActivity(snapshot, ledgerEntries)),
+    recent_snapshots: enrichedSnapshots,
     privacy_ledger: {
       path: ledgerPath(),
       entries: ledgerEntries,
     },
-    restart_required_note: "Restart Codex after changing permissions so the MCP server reloads env.",
+    restart_required_note:
+      "Policy changes reload automatically. Restart the MCP client only after changing workspace roots or other client configuration.",
   };
 }
 
@@ -368,17 +689,24 @@ export function capabilityToEnvUpdate(
 ): { key: string; value: string | null } {
   const map: Record<string, string> = {
     camera: "SENSE_CAMERA_SNAPSHOT",
+    window: "SENSE_SCREEN_SNAPSHOT",
     screen: "SENSE_SCREEN_SNAPSHOT",
+    fullScreen: "SENSE_FULL_SCREEN_SNAPSHOT",
     mic: "SENSE_MIC_LEVEL",
+    calendar: "SENSE_CALENDAR",
+    location: "SENSE_LOCATION",
     rawTitles: "SENSE_RAW_TITLES",
     workspace: "SENSE_WORKSPACE_ROOTS",
   };
-  const key = map[capability];
+  const key = Object.hasOwn(map, capability) ? map[capability] : undefined;
   if (!key) throw new Error(`Unknown capability: ${capability}`);
   if (!enabled) return { key, value: null };
   if (capability === "workspace") {
     const trimmed = value?.trim();
     if (!trimmed) throw new Error("workspace requires a path");
+    if (trimmed.length > 4_096 || /[\u0000-\u001f\u007f]/.test(trimmed)) {
+      throw new Error("workspace path is invalid");
+    }
     return { key, value: trimmed };
   }
   return { key, value: "1" };
@@ -386,15 +714,19 @@ export function capabilityToEnvUpdate(
 
 export function hostAllowed(host: string | undefined): boolean {
   if (!host) return false;
-  const clean = host.toLowerCase();
-  return (
-    clean === "localhost" ||
-    clean.startsWith("localhost:") ||
-    clean === "127.0.0.1" ||
-    clean.startsWith("127.0.0.1:") ||
-    clean === "[::1]" ||
-    clean.startsWith("[::1]:")
-  );
+  try {
+    const parsed = new URL(`http://${host}`);
+    return (
+      !parsed.username &&
+      !parsed.password &&
+      parsed.pathname === "/" &&
+      !parsed.search &&
+      !parsed.hash &&
+      (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
 }
 
 function escapeHtml(value: string | number | boolean | undefined): string {
@@ -428,6 +760,7 @@ function capabilityCard(name: CapabilityName, cap: CapabilityState): string {
           </div>
         </div>
         <code>${escapeHtml(cap.env)}</code>
+        <span class="operation-state">${escapeHtml(cap.operational_state)} · ${escapeHtml(cap.source)}</span>
         ${valueInput}
       </div>
       <label class="switch">
@@ -469,7 +802,7 @@ function receiptRows(receipt: IphoneReceipt | undefined): string {
         ? `<div class="tag-row">${receipt.semantic_tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div>`
         : ""
     }
-    <p class="muted" style="margin-top: 12px;">Hint: ${escapeHtml(receipt.hint)}</p>`;
+    <p class="muted space-top-12">Hint: ${escapeHtml(receipt.hint)}</p>`;
 }
 
 function momentMapRows(state: PanelState): string {
@@ -540,7 +873,7 @@ function snapshotRows(state: PanelState): string {
         .map(
           (snapshot) => `
         <div class="snapshot">
-          <strong>${escapeHtml(snapshot.kind)}</strong>
+          <strong>${escapeHtml(snapshot.capture_scope ?? snapshot.kind)}</strong>
           <span>${escapeHtml(new Date(snapshot.modified_at).toLocaleString())}</span>
           <code>${escapeHtml(snapshot.path)}</code>
           <small>${Math.round(snapshot.size_bytes / 1024)} KB</small>
@@ -566,6 +899,7 @@ function toolActivityRows(state: PanelState): string {
           </div>
           <code>${escapeHtml(activity.artifact_path)}</code>
           <small>${escapeHtml(activity.status)} - ${Math.round(activity.size_bytes / 1024)} KB</small>
+          <small>Scope: ${escapeHtml(activity.capture_scope)}</small>
           <p>${escapeHtml(activity.note)}</p>
         </div>`,
         )
@@ -612,7 +946,7 @@ function ledgerRows(state: PanelState): string {
         })
         .join("")}
     </div>
-    <p class="muted" style="margin-top: 10px;">Ledger path: <code>${escapeHtml(state.privacy_ledger.path)}</code></p>`;
+    <p class="muted space-top-10">Ledger path: <code>${escapeHtml(state.privacy_ledger.path)}</code></p>`;
 }
 
 function healthRows(state: PanelState): string {
@@ -625,7 +959,7 @@ function healthRows(state: PanelState): string {
       <div><span>Recent snapshots</span><strong>${state.health.snapshot_count}</strong></div>
       <div><span>Last snapshot</span><strong>${escapeHtml(lastSnapshot)}</strong></div>
     </div>
-    <p class="muted" style="margin-top: 12px;">Run <code>${escapeHtml(state.health.doctor_command)}</code> for setup and permission checks.</p>
+    <p class="muted space-top-12">Run <code>${escapeHtml(state.health.doctor_command)}</code> for setup and permission checks.</p>
     ${
       state.health.recommendations.length
         ? `<ul class="recommendations">${state.health.recommendations
@@ -635,7 +969,48 @@ function healthRows(state: PanelState): string {
     }`;
 }
 
-export function renderPanelHtml(state: PanelState, token: string): string {
+function operationalStateRows(state: PanelState): string {
+  const runtime = state.operational_states.runtime;
+  const policyRows = Object.entries(state.operational_states.policy)
+    .map(
+      ([name, item]) =>
+        `<div class="operation-row"><code>${escapeHtml(name)}</code><strong>${escapeHtml(item.state)}</strong><small>${escapeHtml(item.source)}</small></div>`,
+    )
+    .join("");
+  const captureRows = Object.entries(state.operational_states.captures)
+    .map(
+      ([name, item]) => `
+        <div class="operation-detail">
+          <div><code>${escapeHtml(name)}</code><strong>${escapeHtml(item.state)}</strong></div>
+          <p>${escapeHtml(item.detail)}</p>
+        </div>`,
+    )
+    .join("");
+  const sensorRows = Object.entries(state.operational_states.sensors)
+    .map(
+      ([name, item]) => `
+        <div class="operation-detail">
+          <div><code>${escapeHtml(name)}</code><strong>${escapeHtml(item.state)}</strong></div>
+          <small>${escapeHtml(item.sampling_mode)} · ${escapeHtml(item.interval_ms)} ms</small>
+          <p>${escapeHtml(item.detail)}</p>
+        </div>`,
+    )
+    .join("");
+  return `
+    <div class="trust">
+      <div><span>Sensor broker</span><strong>${runtime.connected ? escapeHtml(runtime.state) : "Not connected"}</strong></div>
+    </div>
+    <h3>Policy</h3>
+    <div class="operation-list compact">${policyRows}</div>
+    <h3>Capture tools</h3>
+    <div class="operation-list">${captureRows}</div>
+    <details class="sensor-details">
+      <summary>All registered sensors (${Object.keys(state.operational_states.sensors).length})</summary>
+      <div class="operation-list">${sensorRows}</div>
+    </details>`;
+}
+
+export function renderPanelHtml(state: PanelState, cspNonce = "panel-static"): string {
   const caps = Object.entries(state.capabilities)
     .map(([name, cap]) => capabilityCard(name as CapabilityName, cap))
     .join("");
@@ -646,7 +1021,7 @@ export function renderPanelHtml(state: PanelState, token: string): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Sense Settings</title>
-  <style>
+  <style nonce="${escapeHtml(cspNonce)}">
     :root {
       color-scheme: dark;
       --bg: #0d1115;
@@ -668,6 +1043,7 @@ export function renderPanelHtml(state: PanelState, token: string): string {
     header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
     h1 { font-size: 32px; margin: 0 0 8px; letter-spacing: 0; }
     h2 { font-size: 16px; margin: 0 0 8px; letter-spacing: 0; }
+    h3 { font-size: 13px; margin: 16px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
     p { margin: 0; color: var(--muted); line-height: 1.45; }
     code { color: #c7d0d8; background: #0e1012; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
     button { cursor: pointer; border: 1px solid #31547a; background: #19314c; color: var(--text); border-radius: 8px; padding: 10px 12px; font: inherit; transition: .16s ease; }
@@ -710,6 +1086,7 @@ export function renderPanelHtml(state: PanelState, token: string): string {
     .capability-receipt div { display: grid; gap: 2px; background: rgba(255,255,255,.03); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
     .capability-receipt span { color: var(--muted); font-size: 12px; }
     .capability-receipt strong { font-size: 12px; color: #d8e0e7; font-weight: 600; }
+    .operation-state { display: inline-block; margin-left: 8px; color: var(--muted); font-size: 12px; }
     .path-input { display: block; width: min(100%, 560px); margin-top: 12px; background: #0e1012; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; font: inherit; }
     .switch input { display: none; }
     .switch span { position: relative; display: block; width: 58px; height: 34px; background: #3a424b; border-radius: 999px; cursor: pointer; transition: background .16s ease; }
@@ -719,6 +1096,20 @@ export function renderPanelHtml(state: PanelState, token: string): string {
     .trust { display: grid; gap: 10px; }
     .trust div { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
     .trust strong { color: var(--text); }
+    .panel-stack { margin-top: 18px; }
+    .space-top-10 { margin-top: 10px; }
+    .space-top-12 { margin-top: 12px; }
+    .operation-list { display: grid; gap: 8px; }
+    .operation-list.compact { gap: 4px; }
+    .operation-row, .operation-detail { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 9px; }
+    .operation-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; }
+    .operation-row small { grid-column: 1 / -1; color: var(--muted); }
+    .operation-detail { display: grid; gap: 6px; }
+    .operation-detail div { display: flex; justify-content: space-between; gap: 8px; }
+    .operation-detail small { color: var(--muted); }
+    .operation-detail p { font-size: 12px; }
+    .sensor-details { margin-top: 16px; }
+    .sensor-details summary { cursor: pointer; color: var(--blue); margin-bottom: 10px; }
     .recommendations { margin: 12px 0 0; padding-left: 18px; color: var(--muted); line-height: 1.45; }
     .recommendations.tight { margin: 0; }
     .muted { color: var(--muted); }
@@ -744,9 +1135,9 @@ export function renderPanelHtml(state: PanelState, token: string): string {
     <header>
       <div>
         <h1>Sense Settings</h1>
-        <p>Local context controls for AI clients. Explicit snapshots only. No background camera or screen capture.</p>
+        <p>Local device acquisition controls. Semantic sensors may sample while a client is connected; media capture always requires explicit local consent.</p>
       </div>
-      <div class="status-pill">Context Active</div>
+      <div class="status-pill">${state.operational_states.runtime.connected ? `Broker ${escapeHtml(state.operational_states.runtime.state)}` : "Settings Ready"}</div>
     </header>
 
     ${momentMapRows(state)}
@@ -760,38 +1151,43 @@ export function renderPanelHtml(state: PanelState, token: string): string {
         <section class="panel">
           <h2>Trust Model</h2>
           <div class="trust">
-            <div><span>Local only</span><strong>${state.trust.local_only ? "Yes" : "No"}</strong></div>
-            <div><span>Pull based</span><strong>${state.trust.pull_based ? "Yes" : "No"}</strong></div>
-            <div><span>Background capture</span><strong>${state.trust.background_capture ? "Yes" : "No"}</strong></div>
-            <div><span>Temporary snapshots</span><strong>${state.trust.snapshots_temporary ? "Yes" : "No"}</strong></div>
+            <div><span>Local acquisition</span><strong>Mac / paired iPhone</strong></div>
+            <div><span>Provider delivery</span><strong>Client/provider controlled</strong></div>
+            <div><span>Semantic sampling</span><strong>While client connected</strong></div>
+            <div><span>Media capture</span><strong>Explicit local consent</strong></div>
+            <div><span>Snapshot retention</span><strong>Temporary local files</strong></div>
           </div>
+          <p class="muted space-top-12">Sense keeps acquisition and brokering local. The MCP client and its model provider control any delivery beyond this device.</p>
         </section>
-        <section class="panel" style="margin-top: 18px;">
+        <section class="panel panel-stack">
+          <h2>Operational States</h2>
+          ${operationalStateRows(state)}
+        </section>
+        <section class="panel panel-stack">
           <h2>Health</h2>
           ${healthRows(state)}
         </section>
-        <section class="panel" style="margin-top: 18px;">
+        <section class="panel panel-stack">
           <h2>Privacy Ledger</h2>
           ${ledgerRows(state)}
         </section>
-        <section class="panel" style="margin-top: 18px;">
+        <section class="panel panel-stack">
           <h2>Recent Tool Activity</h2>
           ${toolActivityRows(state)}
         </section>
-        <section class="panel" style="margin-top: 18px;">
+        <section class="panel panel-stack">
           <h2>Recent Snapshots</h2>
           ${snapshotRows(state)}
         </section>
         <section class="notice">
-          <strong>Restart Codex</strong><br />
+          <strong>Reload behavior</strong><br />
           ${escapeHtml(state.restart_required_note)}
         </section>
       </aside>
     </div>
   </main>
-  <div class="toast" id="toast">Saved. Restart Codex.</div>
-  <script>
-    const token = ${JSON.stringify(token)};
+  <div class="toast" id="toast">Saved.</div>
+  <script nonce="${escapeHtml(cspNonce)}">
     const toast = document.getElementById("toast");
     function showToast(text) {
       toast.textContent = text;
@@ -804,7 +1200,8 @@ export function renderPanelHtml(state: PanelState, token: string): string {
       const value = valueInput ? valueInput.value : undefined;
       const response = await fetch("/api/permissions", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Sense-Panel-Token": token },
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
         body: JSON.stringify({ capability, enabled: input.checked, value })
       });
       if (!response.ok) {
@@ -813,7 +1210,8 @@ export function renderPanelHtml(state: PanelState, token: string): string {
         showToast(text || "Could not save");
         return;
       }
-      showToast("Saved. Restart Codex.");
+      const result = await response.json();
+      showToast(result.restart_required ? "Saved. Restart the MCP client." : "Saved. Policy is live.");
     }
     document.querySelectorAll("[data-capability]").forEach((input) => {
       input.addEventListener("change", () => updateCapability(input));
@@ -846,7 +1244,8 @@ export function renderPanelHtml(state: PanelState, token: string): string {
       routeOutput.textContent = "Checking route...";
       const response = await fetch("/api/route", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Sense-Panel-Token": token },
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
         body: JSON.stringify({ user_request: routeInput.value })
       });
       const text = await response.text();
@@ -868,7 +1267,7 @@ export function renderPanelHtml(state: PanelState, token: string): string {
             (filter === "media" && entry.dataset.media === "1") ||
             (filter === "planned" && entry.dataset.status === "planned") ||
             (filter === "iphone" && entry.dataset.tool.includes("iphone"));
-          entry.style.display = show ? "" : "none";
+          entry.hidden = !show;
         });
       });
     });
@@ -878,74 +1277,239 @@ export function renderPanelHtml(state: PanelState, token: string): string {
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  let body = "";
-  for await (const chunk of req) {
-    body += chunk;
-    if (body.length > MAX_BODY_BYTES) throw new Error("request body too large");
+  const contentType = String(req.headers["content-type"] ?? "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (contentType !== "application/json") {
+    throw new PanelHttpError(415, "JSON content type required");
   }
-  return body ? JSON.parse(body) : {};
+  const declared = req.headers["content-length"];
+  if (typeof declared !== "string" || !/^\d+$/.test(declared)) {
+    throw new PanelHttpError(411, "Content length required");
+  }
+  const declaredBytes = Number(declared);
+  if (!Number.isSafeInteger(declaredBytes)) throw new PanelHttpError(400, "Invalid content length");
+  if (declaredBytes > MAX_BODY_BYTES) throw new PanelHttpError(413, "Request body too large");
+  const body = await readBoundedBody(req, MAX_BODY_BYTES);
+  if (body.length !== declaredBytes) throw new PanelHttpError(400, "Content length mismatch");
+  return body.length ? JSON.parse(body.toString("utf8")) : {};
 }
 
-async function loadPanelState(configPath: string): Promise<PanelState> {
-  const toml = await readFile(configPath, "utf8");
+async function readBootstrapToken(req: IncomingMessage): Promise<string> {
+  const contentType = String(req.headers["content-type"] ?? "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (contentType !== "application/x-www-form-urlencoded") {
+    throw new PanelHttpError(415, "Form content type required");
+  }
+  const declared = req.headers["content-length"];
+  if (typeof declared !== "string" || !/^\d+$/.test(declared)) {
+    throw new PanelHttpError(411, "Content length required");
+  }
+  const declaredBytes = Number(declared);
+  if (!Number.isSafeInteger(declaredBytes)) throw new PanelHttpError(400, "Invalid content length");
+  if (declaredBytes > MAX_BOOTSTRAP_BYTES) throw new PanelHttpError(413, "Request body too large");
+  const body = await readBoundedBody(req, MAX_BOOTSTRAP_BYTES);
+  if (body.length !== declaredBytes) throw new PanelHttpError(400, "Content length mismatch");
+  const entries = [...new URLSearchParams(body.toString("utf8")).entries()];
+  if (entries.length !== 1 || entries[0][0] !== "token") {
+    throw new PanelHttpError(400, "Invalid bootstrap request");
+  }
+  return entries[0][1];
+}
+
+async function readBoundedBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (bytes > maxBytes) throw new PanelHttpError(413, "Request body too large");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks, bytes);
+}
+
+async function readBoundedTextFile(file: string, maxBytes: number): Promise<string> {
+  const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw new Error("panel configuration is not a regular file");
+    if (info.size > maxBytes) throw new Error("panel configuration is too large");
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    if (total > maxBytes) throw new Error("panel configuration is too large");
+    return buffer.subarray(0, total).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+export type PanelRuntimeLoader = () => Promise<ContextResult | undefined>;
+
+async function loadExistingBrokerRuntime(): Promise<ContextResult | undefined> {
+  let client: BrokerClient | undefined;
+  try {
+    client = await BrokerClient.connect(defaultBrokerSocketPath(), { requestTimeoutMs: 500 });
+    return await client.getContext({ refresh: "cached" });
+  } catch {
+    return undefined;
+  } finally {
+    await client?.close().catch(() => undefined);
+  }
+}
+
+async function loadPanelState(
+  configPath: string,
+  policyFile: string | undefined,
+  runtimeLoader: PanelRuntimeLoader,
+): Promise<PanelState> {
+  const toml = await readBoundedTextFile(configPath, MAX_CONFIG_BYTES);
   const env = { ...process.env, ...parseSenseEnvFromToml(toml) };
-  const snapshots = await recentSnapshots(snapshotDir(env));
-  const ledger = await readAccessLedger(20);
-  return sensePanelState(env, snapshots, configPath, ledger, await readActiveIphoneContext());
+  const store = new SensePolicyStore(policyFile ?? env.SENSE_POLICY_PATH ?? policyPath(), env);
+  const [snapshots, ledger, iphoneContext, policy, runtime] = await Promise.all([
+    recentSnapshots(snapshotDir(env)),
+    readAccessLedger(20),
+    readActiveIphoneContext(),
+    store.load(),
+    runtimeLoader().catch(() => undefined),
+  ]);
+  return sensePanelState(env, snapshots, configPath, ledger, iphoneContext, policy, runtime);
 }
 
-async function updatePermission(configPath: string, input: unknown): Promise<void> {
+function capabilityPolicyKey(capability: string): PolicyKey | undefined {
+  if (capability === "screen") return "window_snapshot";
+  return Object.hasOwn(CAPABILITY_POLICY, capability)
+    ? CAPABILITY_POLICY[capability as Exclude<CapabilityName, "workspace">]
+    : undefined;
+}
+
+async function updatePermission(
+  configPath: string,
+  policyFile: string | undefined,
+  input: unknown,
+): Promise<{ restart_required: boolean }> {
   const body = input as { capability?: unknown; enabled?: unknown; value?: unknown };
   if (typeof body.capability !== "string" || typeof body.enabled !== "boolean") {
     throw new Error("invalid permission request");
   }
-  const update = capabilityToEnvUpdate(
-    body.capability,
-    body.enabled,
-    typeof body.value === "string" ? body.value : undefined,
-  );
-  const current = await readFile(configPath, "utf8");
-  await writeFile(configPath, setSenseEnvInToml(current, update.key, update.value));
+  if (body.capability === "workspace") {
+    const update = capabilityToEnvUpdate(
+      body.capability,
+      body.enabled,
+      typeof body.value === "string" ? body.value : undefined,
+    );
+    const current = await readBoundedTextFile(configPath, MAX_CONFIG_BYTES);
+    const updated = setSenseEnvInToml(current, update.key, update.value);
+    if (Buffer.byteLength(updated) > MAX_CONFIG_BYTES) throw new Error("panel configuration is too large");
+    await writeFile(configPath, updated);
+    return { restart_required: true };
+  }
+
+  const key = capabilityPolicyKey(body.capability);
+  if (!key) throw new Error(`Unknown capability: ${body.capability}`);
+  const current = await readBoundedTextFile(configPath, MAX_CONFIG_BYTES);
+  const env = { ...process.env, ...parseSenseEnvFromToml(current) };
+  await new SensePolicyStore(policyFile ?? env.SENSE_POLICY_PATH ?? policyPath(), env).update({
+    [key]: body.enabled,
+  });
+  return { restart_required: false };
 }
 
-function send(res: ServerResponse, status: number, body: string, contentType = "text/plain"): void {
+class PanelHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly publicMessage: string,
+  ) {
+    super(publicMessage);
+    this.name = "PanelHttpError";
+  }
+}
+
+export function originAllowed(origin: string | undefined): boolean {
+  if (!origin) return true;
+  try {
+    const parsed = new URL(origin);
+    return (
+      parsed.protocol === "http:" &&
+      (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function panelTokenMatches(candidate: string, token: string): boolean {
+  const expected = Buffer.from(token, "utf8");
+  const received = Buffer.from(candidate, "utf8");
+  return expected.length === received.length && timingSafeEqual(expected, received);
+}
+
+function panelSessionAllowed(headers: IncomingHttpHeaders, token: string): boolean {
+  const cookie = headers.cookie;
+  if (typeof cookie !== "string") return false;
+  const values = cookie
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.startsWith(`${PANEL_SESSION_COOKIE}=`))
+    .map((entry) => entry.slice(PANEL_SESSION_COOKIE.length + 1));
+  return values.length === 1 && panelTokenMatches(values[0], token);
+}
+
+function panelSessionCookie(token: string): string {
+  return `${PANEL_SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/`;
+}
+
+function panelSecurityHeaders(cspNonce: string): OutgoingHttpHeaders {
+  return {
+    "Content-Security-Policy":
+      `default-src 'none'; script-src 'nonce-${cspNonce}'; style-src 'nonce-${cspNonce}'; ` +
+      "img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; " +
+      "frame-ancestors 'none'; object-src 'none'",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), display-capture=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "X-DNS-Prefetch-Control": "off",
+  };
+}
+
+function send(
+  res: ServerResponse,
+  status: number,
+  body: string,
+  contentType = "text/plain; charset=utf-8",
+  extraHeaders: OutgoingHttpHeaders = {},
+): void {
   res.writeHead(status, {
     "Content-Type": contentType,
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
+    ...extraHeaders,
   });
   res.end(body);
-}
-
-function iphoneBridgeHeaderAllowed(req: IncomingMessage): boolean {
-  return req.headers["x-sense-bridge"] === "sense-ios";
-}
-
-function bearerTokenAllowed(req: IncomingMessage, token: string): boolean {
-  return req.headers.authorization === `Bearer ${token}`;
-}
-
-function lanAddress(): string {
-  for (const addresses of Object.values(os.networkInterfaces())) {
-    for (const address of addresses ?? []) {
-      if (address.family === "IPv4" && !address.internal) return address.address;
-    }
-  }
-  return "127.0.0.1";
 }
 
 async function acceptIphoneContext(input: unknown): Promise<IphoneBridgeReceipt> {
   const payload = await writeIphoneContextPayload(input);
   const receiptId = randomUUID();
   const acceptedFields = iphoneAcceptedFields(payload);
-  void recordAccess({
+  await recordAccess({
     tool: "iphone_context_bridge",
     status: "completed",
     reason: `Accepted iPhone check-in with ${acceptedFields.length} semantic fields.`,
     media_captured: false,
     context_domains: ["user"],
     plan_intent: payload.internal_state.context_mode,
-  });
+  }).catch(() => undefined);
   return {
     ok: true,
     stored: true,
@@ -957,73 +1521,38 @@ async function acceptIphoneContext(input: unknown): Promise<IphoneBridgeReceipt>
     iphone_signals: iphoneSignalLabels(payload),
     accepted_fields: acceptedFields,
     accepted_summary: acceptedSummary(acceptedFields),
-    path: iphoneContextPath(),
   };
 }
 
-async function startLanIphoneBridge(port: number, token: string): Promise<LanBridgeState & { close: () => Promise<void> }> {
-  const server = createServer(async (req, res) => {
-    try {
-      if (req.url !== "/api/iphone-context") {
-        send(res, 404, "Not found");
-        return;
-      }
+function renderPanelLauncher(panelUrl: string, bootstrapToken: string): string {
+  const nonce = randomBytes(16).toString("base64url");
+  const bootstrapUrl = new URL("bootstrap", panelUrl).toString();
+  const origin = new URL(panelUrl).origin;
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="referrer" content="no-referrer" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${escapeHtml(nonce)}'; form-action ${escapeHtml(origin)}; base-uri 'none'" />
+  <title>Opening Sense Settings</title>
+</head>
+<body>
+  <form id="sense-launch" method="post" action="${escapeHtml(bootstrapUrl)}">
+    <input type="hidden" name="token" value="${escapeHtml(bootstrapToken)}" />
+    <noscript><button type="submit">Open Sense Settings</button></noscript>
+  </form>
+  <script nonce="${escapeHtml(nonce)}">document.getElementById("sense-launch").submit();</script>
+</body>
+</html>`;
+}
 
-      if (!bearerTokenAllowed(req, token)) {
-        send(res, 401, "Missing bridge token");
-        return;
-      }
-
-      if (req.method === "GET") {
-        send(
-          res,
-          200,
-          JSON.stringify(
-            {
-              ok: true,
-              accepts: "sense_ios_check_in",
-              path: iphoneContextPath(),
-              note: "LAN bridge is limited to iPhone companion context reads/writes.",
-            },
-            null,
-            2,
-          ),
-          "application/json",
-        );
-        return;
-      }
-
-      if (req.method === "POST") {
-        if (!iphoneBridgeHeaderAllowed(req)) {
-          send(res, 403, "Missing iPhone bridge header");
-          return;
-        }
-        send(res, 200, JSON.stringify(await acceptIphoneContext(await readJsonBody(req)), null, 2), "application/json");
-        return;
-      }
-
-      send(res, 405, "Method not allowed");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "bridge error";
-      send(res, 400, message);
-    }
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, "0.0.0.0", () => resolve());
-  });
-
-  const address = server.address();
-  const actualPort = typeof address === "object" && address ? address.port : port;
-  return {
-    url: `http://${lanAddress()}:${actualPort}/api/iphone-context`,
-    token,
-    close: () =>
-      new Promise((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      }),
-  };
+function panelLauncherPath(): string {
+  return path.join(
+    os.tmpdir(),
+    `sense-mcp-${process.getuid?.() ?? "user"}`,
+    "panel",
+    `sense-panel-${randomUUID()}.html`,
+  );
 }
 
 export async function startPanel(options: {
@@ -1033,74 +1562,103 @@ export async function startPanel(options: {
   bridgeToken?: string;
   open?: boolean;
   configPath?: string;
-} = {}): Promise<{ url: string; lanBridge?: LanBridgeState; close: () => Promise<void> }> {
+  policyFile?: string;
+  runtimeLoader?: PanelRuntimeLoader;
+  openLauncher?: (launcherPath: string) => void | Promise<void>;
+} = {}): Promise<{
+  url: string;
+  launcherPath: string;
+  lanBridge?: LanBridgeState;
+  close: () => Promise<void>;
+}> {
   const configPath = options.configPath || process.env.SENSE_CODEX_CONFIG || DEFAULT_CODEX_CONFIG;
-  const token = randomUUID();
+  const bootstrapToken = randomBytes(32).toString("base64url");
+  const sessionToken = randomBytes(32).toString("base64url");
+  const panelInstanceId = randomUUID();
+  let bootstrapAvailable = true;
+  let activeLauncherPath: string | undefined;
+  let runtimeFile: string | undefined;
   const port = options.port ?? Number(process.env.SENSE_PANEL_PORT || DEFAULT_PORT);
+  const runtimeLoader = options.runtimeLoader ?? loadExistingBrokerRuntime;
 
   const server = createServer(async (req, res) => {
+    const cspNonce = randomBytes(16).toString("base64url");
+    const securityHeaders = panelSecurityHeaders(cspNonce);
+    const respond = (
+      status: number,
+      body: string,
+      contentType?: string,
+      extraHeaders: OutgoingHttpHeaders = {},
+    ) => send(res, status, body, contentType, { ...securityHeaders, ...extraHeaders });
     if (!hostAllowed(req.headers.host)) {
-      send(res, 403, "Forbidden host");
+      respond(403, "Forbidden host");
+      return;
+    }
+    let requestUrl: URL;
+    try {
+      requestUrl = new URL(req.url ?? "/", "http://sense.local");
+    } catch {
+      respond(400, "Invalid panel request");
+      return;
+    }
+    const pathname = requestUrl.pathname;
+    const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+    const privateLauncherBootstrap =
+      req.method === "POST" && pathname === "/bootstrap" && origin === "null";
+    if (!originAllowed(origin) && !privateLauncherBootstrap) {
+      respond(403, "Forbidden origin");
       return;
     }
 
     try {
-      if (req.method === "GET" && req.url === "/") {
-        const state = await loadPanelState(configPath);
-        send(res, 200, renderPanelHtml(state, token), "text/html; charset=utf-8");
+      if (requestUrl.search || requestUrl.hash) throw new PanelHttpError(404, "Not found");
+      if (req.method === "POST" && pathname === "/bootstrap") {
+        const candidate = await readBootstrapToken(req);
+        if (!bootstrapAvailable || !panelTokenMatches(candidate, bootstrapToken)) {
+          throw new PanelHttpError(403, "Invalid or expired panel bootstrap");
+        }
+        bootstrapAvailable = false;
+        const launcher = activeLauncherPath;
+        activeLauncherPath = undefined;
+        if (launcher) await removePrivateFile(launcher).catch(() => undefined);
+        respond(303, "", undefined, {
+          Location: "/",
+          "Set-Cookie": panelSessionCookie(sessionToken),
+        });
         return;
       }
-      if (req.method === "GET" && req.url === "/api/status") {
-        send(res, 200, JSON.stringify(await loadPanelState(configPath), null, 2), "application/json");
+      if (req.method === "GET" && pathname === "/") {
+        if (!panelSessionAllowed(req.headers, sessionToken)) {
+          throw new PanelHttpError(403, "Secure panel session required");
+        }
+        const state = await loadPanelState(configPath, options.policyFile, runtimeLoader);
+        respond(200, renderPanelHtml(state, cspNonce), "text/html; charset=utf-8");
         return;
       }
-      if (req.method === "GET" && req.url === "/api/iphone-context") {
-        send(
-          res,
+      if (pathname.startsWith("/api/") && !panelSessionAllowed(req.headers, sessionToken)) {
+        throw new PanelHttpError(403, "Invalid panel session");
+      }
+      if (req.method === "GET" && pathname === "/api/status") {
+        respond(
           200,
-          JSON.stringify(
-            {
-              ok: true,
-              accepts: "sense_ios_check_in",
-              path: iphoneContextPath(),
-              note: "POST semantic self-report context here from the Sense iPhone companion.",
-            },
-            null,
-            2,
-          ),
+          JSON.stringify(await loadPanelState(configPath, options.policyFile, runtimeLoader), null, 2),
           "application/json",
         );
         return;
       }
-      if (req.method === "POST" && req.url === "/api/iphone-context") {
-        if (!iphoneBridgeHeaderAllowed(req)) {
-          send(res, 403, "Missing iPhone bridge header");
-          return;
-        }
-        send(res, 200, JSON.stringify(await acceptIphoneContext(await readJsonBody(req)), null, 2), "application/json");
+      if (req.method === "POST" && pathname === "/api/permissions") {
+        const result = await updatePermission(configPath, options.policyFile, await readJsonBody(req));
+        respond(200, JSON.stringify({ ok: true, ...result }), "application/json");
         return;
       }
-      if (req.method === "POST" && req.url === "/api/permissions") {
-        if (req.headers["x-sense-panel-token"] !== token) {
-          send(res, 403, "Invalid panel token");
-          return;
-        }
-        await updatePermission(configPath, await readJsonBody(req));
-        send(res, 200, JSON.stringify({ ok: true }), "application/json");
-        return;
-      }
-      if (req.method === "POST" && req.url === "/api/route") {
-        if (req.headers["x-sense-panel-token"] !== token) {
-          send(res, 403, "Invalid panel token");
-          return;
-        }
+      if (req.method === "POST" && pathname === "/api/route") {
         const body = (await readJsonBody(req)) as { user_request?: unknown };
         if (typeof body.user_request !== "string" || !body.user_request.trim()) {
-          send(res, 400, "user_request is required");
+          throw new PanelHttpError(400, "user_request is required");
           return;
         }
         const plan = planRelevantContext(body.user_request.slice(0, 500));
-        void recordAccess({
+        await recordAccess({
           tool: "panel_router_playground",
           status: "planned",
           reason: plan.context_plan.reason,
@@ -1111,16 +1669,26 @@ export async function startPanel(options: {
           budget_mode: plan.context_plan.budget.mode,
           max_tokens: plan.context_plan.budget.max_tokens,
           external_context_needed: plan.context_plan.external_context_needed,
-        });
-        send(res, 200, JSON.stringify(plan, null, 2), "application/json");
+        }).catch(() => undefined);
+        respond(200, JSON.stringify(plan, null, 2), "application/json");
         return;
       }
-      send(res, 404, "Not found");
+      const knownPath = ["/", "/bootstrap", "/api/status", "/api/permissions", "/api/route"].includes(
+        pathname,
+      );
+      respond(knownPath ? 405 : 404, knownPath ? "Method not allowed" : "Not found");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "panel error";
-      send(res, 400, message);
+      if (err instanceof PanelHttpError) respond(err.status, err.publicMessage);
+      else respond(400, "Invalid panel request");
     }
   });
+
+  server.requestTimeout = PANEL_REQUEST_TIMEOUT_MS;
+  server.headersTimeout = PANEL_REQUEST_TIMEOUT_MS;
+  server.keepAliveTimeout = 1_000;
+  server.maxHeadersCount = 32;
+  server.maxConnections = 32;
+  server.maxRequestsPerSocket = 32;
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -1130,27 +1698,61 @@ export async function startPanel(options: {
   const address = server.address();
   const actualPort = typeof address === "object" && address ? address.port : port;
   const url = `http://127.0.0.1:${actualPort}/`;
-  const lanBridge = options.lanBridge
-    ? await startLanIphoneBridge(
-        options.lanPort ?? Number(process.env.SENSE_LAN_BRIDGE_PORT || DEFAULT_PORT + 1),
-        options.bridgeToken || process.env.SENSE_IPHONE_BRIDGE_TOKEN || randomUUID(),
-      )
-    : undefined;
-
-  if (options.open) {
-    const { spawn } = await import("node:child_process");
-    spawn("open", [url], { stdio: "ignore", detached: true }).unref();
+  const launcherPath = panelLauncherPath();
+  let closePanelPromise: Promise<void> | undefined;
+  const closePanelServer = () => {
+    closePanelPromise ??= new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    return closePanelPromise;
+  };
+  let lanBridge: Awaited<ReturnType<typeof startLanIphoneBridge>> | undefined;
+  try {
+    lanBridge = options.lanBridge
+      ? await startLanIphoneBridge(
+          options.lanPort ?? Number(process.env.SENSE_LAN_BRIDGE_PORT || DEFAULT_PORT + 1),
+          options.bridgeToken ||
+            process.env.SENSE_IPHONE_BRIDGE_TOKEN ||
+            randomBytes(32).toString("base64url"),
+          (input) => acceptIphoneContext(input),
+        )
+      : undefined;
+    await atomicWritePrivateFile(
+      launcherPath,
+      Buffer.from(renderPanelLauncher(url, bootstrapToken), "utf8"),
+      { maxBytes: MAX_LAUNCHER_BYTES },
+    );
+    activeLauncherPath = launcherPath;
+    runtimeFile = await writePanelRuntime(panelInstanceId, actualPort);
+    if (options.open) {
+      if (options.openLauncher) {
+        await options.openLauncher(launcherPath);
+      } else {
+        const { spawn } = await import("node:child_process");
+        spawn("/usr/bin/open", [launcherPath], { stdio: "ignore", detached: true }).unref();
+      }
+    }
+  } catch (error) {
+    activeLauncherPath = undefined;
+    await removePrivateFile(launcherPath).catch(() => undefined);
+    if (runtimeFile) await removePanelRuntime(runtimeFile);
+    await lanBridge?.close().catch(() => undefined);
+    await closePanelServer().catch(() => undefined);
+    throw error;
   }
 
   return {
     url,
-    ...(lanBridge ? { lanBridge: { url: lanBridge.url, token: lanBridge.token } } : {}),
+    launcherPath,
+    ...(lanBridge
+      ? { lanBridge: { url: lanBridge.url, pairingUrl: lanBridge.pairingUrl } }
+      : {}),
     close: () =>
       Promise.all([
-        new Promise<void>((resolve, reject) => {
-          server.close((err) => (err ? reject(err) : resolve()));
-        }),
+        closePanelServer(),
         lanBridge?.close() ?? Promise.resolve(),
+        removePrivateFile(launcherPath).catch(() => undefined),
+        runtimeFile ? removePanelRuntime(runtimeFile) : Promise.resolve(),
       ]).then(() => undefined),
   };
 }

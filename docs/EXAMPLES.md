@@ -3,6 +3,10 @@
 These examples show the shape of Sense responses. Exact fields depend on the
 machine, permissions, and current app state.
 
+The snippets show selected fields. Current MCP responses also include `ok`,
+`context_satisfied`, provider health, refreshed domains when applicable, and an
+enforced `output_budget` or context `budget` with byte and token estimates.
+
 ## Relevance Router
 
 Request:
@@ -48,7 +52,7 @@ Expected plan:
   "minimum_tool": "get_schedule_context",
   "relevant_domains": ["schedule", "user"],
   "recommended_tools": ["get_schedule_context", "get_user_state"],
-  "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
+  "avoided_tools": ["take_camera_snapshot", "take_window_snapshot", "take_full_screen_snapshot"],
   "context_plan": {
     "expected_value": "high",
     "budget": { "mode": "focused", "max_tokens": 140 },
@@ -73,7 +77,7 @@ Expected plan:
   "intent": "privacy_boundary",
   "minimum_tool": "none",
   "recommended_tools": [],
-  "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
+  "avoided_tools": ["take_camera_snapshot", "take_window_snapshot", "take_full_screen_snapshot"],
   "context_plan": {
     "expected_value": "none",
     "budget": { "mode": "none", "max_tokens": 0 },

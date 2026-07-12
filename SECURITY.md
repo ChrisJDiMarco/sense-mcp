@@ -1,53 +1,55 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+## Supported versions
 
-`sense-mcp` is currently pre-1.0. Security fixes are made on `main` and included
-in the next release.
+Sense is pre-1.0. Security fixes land on `main` and ship in the next release.
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-Please do not open a public issue for a vulnerability.
+Use GitHub private vulnerability reporting or open a private security advisory.
+Do not file a public issue. Include the affected version, platform, MCP client,
+reproduction steps, and the data class involved.
 
-Use GitHub's private vulnerability reporting or open a private security advisory
-for the repository. Include:
+## Security boundaries
 
-- affected version or commit
-- platform and MCP client
-- steps to reproduce
-- whether the issue exposes camera, screen, audio, window title, calendar, or
-  filesystem data
+- One per-user broker owns sensor cadence and in-memory state. MCP adapters use
+  a private Unix socket and reconnect or elect a replacement after broker loss.
+- Central policy defaults sensitive probes and raw fields off. Invalid policy
+  storage fails closed.
+- Calendar uses optional headless `icalBuddy` only when policy enables it. Sense
+  never launches Calendar.app.
+- Context responses have enforced serialized byte ceilings. Token counts are
+  conservative estimates.
+- Camera, app-window, and full-screen capture each require a matching local,
+  short-lived, single-use consent receipt immediately before acquisition.
+  Sense rechecks policy before and after acquisition and again after private-file
+  finalization, discarding artifacts if policy changes. App-window consent also
+  names and binds the validated on-screen owner app, process, and bounds.
+- `take_window_snapshot` does not activate the target app. Full-screen capture
+  is a separate tool. Deprecated `take_screen_snapshot` remains window-only.
+- Private files use bounded reads, symlink rejection, modes `0700`/`0600`, and
+  atomic replacement. Locks are not reaped while their recorded PID is alive.
+- The settings panel binds to localhost. A private `0600` launcher posts a
+  one-use bootstrap secret without putting it in a URL or process argument;
+  the server exchanges it for a distinct HttpOnly, SameSite session and
+  authenticates the HTML, status, and every API request. The plaintext
+  fixed-header iPhone endpoint has been removed; companion traffic uses the
+  separate authenticated encrypted bridge.
+- Accepted iPhone LAN request payloads and successful response payloads use
+  AES-256-GCM with timestamp, nonce, method, and path binding. Successful
+  responses are bound to their request nonce; rejected requests use generic
+  plaintext errors. Replay, skew, and body limits are enforced. Pairing secrets
+  live in iOS Keychain and are not printed. The secret-bearing clipboard pairing
+  link is exposed to clipboard managers and same-user processes. Local check-in
+  history uses a bounded atomic file with complete file protection; expired
+  records are removed from memory and disk.
 
-We will acknowledge valid reports as quickly as possible and prioritize issues
-that weaken the local-only, pull-based, opt-in privacy model.
+Sensor acquisition is local. MCP tool results may be forwarded by the client to
+its model provider. Review that provider's data policy before enabling media or
+raw-title access.
 
-## Security Boundaries
+## Out of scope
 
-The intended security model is:
-
-- Sensors run locally.
-- Context frames contain semantic states, not raw private content.
-- Camera and screen snapshots are explicit tools, not background sensors.
-- Microphone support samples level only, never audio content.
-- Snapshot files are temporary local files with private permissions.
-- The control panel binds to `127.0.0.1` and requires an ephemeral token for
-  permission changes.
-- The iPhone companion bridge is localhost-only by default and requires
-  `X-Sense-Bridge: sense-ios` for write requests to reduce browser-based blind
-  posts.
-- `sense-mcp settings --lan --open` starts a separate bridge-only listener for
-  physical iPhone sync. It exposes only `/api/iphone-context` and requires a
-  bearer token printed by the command.
-- Known Sense environment keys are allowlisted before config writes.
-
-## Out of Scope
-
-`sense-mcp` does not try to defend against:
-
-- a malicious local administrator
-- a compromised MCP client
-- malware with access to the same user account
-- users explicitly enabling raw-title or snapshot features and sharing outputs
-
-If your threat model includes those cases, do not enable optional media or raw
-title capabilities.
+Sense does not defend against a malicious administrator, malware, a compromised
+MCP client, or another process running as the same user. Do not enable optional
+media or raw titles when those actors are in scope.

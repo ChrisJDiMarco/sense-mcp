@@ -18,19 +18,24 @@ node dist/index.js init --client claude-desktop --profile developer --workspace 
 Use the generated command, args, and env block in the MCP config surface your
 Claude Code installation expects.
 
-## Recommended Env
+## Recommended policy
 
-For code work, start with workspace and screen context:
+Workspace roots remain an MCP client environment setting:
 
 ```bash
-SENSE_SCREEN_SNAPSHOT=1
 SENSE_WORKSPACE_ROOTS=/absolute/path/to/workspace
+```
+
+Enable app-window capture from a terminal after Sense is installed:
+
+```bash
+sense-mcp enable screen
 ```
 
 Add camera only if you want appearance or room checks:
 
 ```bash
-SENSE_CAMERA_SNAPSHOT=1
+sense-mcp enable camera
 ```
 
 ## Verification
@@ -43,3 +48,6 @@ node dist/index.js settings --open
 
 When prompting Claude Code, start with `get_relevant_context`. If
 `context_plan.plan_only` is true, answer normally without pulling a ContextFrame.
+Use `take_window_snapshot` for an app window. `take_screen_snapshot` is a
+deprecated window-only alias; full-screen capture is separate. Every media call
+requires local allow-once consent.

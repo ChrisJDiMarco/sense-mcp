@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [20, 22]
+        node: [22, 24]
 
     steps:
       - name: Checkout
@@ -33,3 +33,6 @@ jobs:
 
       - name: Check
         run: npm run check
+
+      - name: Verify published package
+        run: npm run check:package

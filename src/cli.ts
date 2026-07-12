@@ -1,14 +1,31 @@
+import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { loadSensePolicy, updateSensePolicy, type PolicyKey, type PolicyValues } from "./policy.js";
 
 const DEFAULT_CODEX_CONFIG = path.join(os.homedir(), ".codex", "config.toml");
 
 const CAPABILITY_ENV: Record<string, string> = {
   camera: "SENSE_CAMERA_SNAPSHOT",
   screen: "SENSE_SCREEN_SNAPSHOT",
+  window: "SENSE_SCREEN_SNAPSHOT",
+  "full-screen": "SENSE_FULL_SCREEN_SNAPSHOT",
   mic: "SENSE_MIC_LEVEL",
+  calendar: "SENSE_CALENDAR",
+  location: "SENSE_LOCATION",
   "raw-titles": "SENSE_RAW_TITLES",
+};
+
+const CAPABILITY_POLICY: Record<string, PolicyKey> = {
+  camera: "camera_snapshot",
+  screen: "window_snapshot",
+  window: "window_snapshot",
+  "full-screen": "full_screen_snapshot",
+  mic: "mic_level",
+  calendar: "calendar",
+  location: "location",
+  "raw-titles": "raw_titles",
 };
 
 type EnvLike = Record<string, string | undefined>;
@@ -23,6 +40,10 @@ export interface InitConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
+}
+
+export function capabilityPolicyKey(capability: string): PolicyKey | undefined {
+  return CAPABILITY_POLICY[capability];
 }
 
 function quoteToml(value: string): string {
@@ -293,16 +314,87 @@ export function renderInitPreview(config: InitConfig): string {
   ].join("\n");
 }
 
-export function renderPermissionStatus(env: EnvLike = process.env): string {
-  const state = (name: string) => (env[CAPABILITY_ENV[name]] === "1" ? "enabled" : "disabled");
+export interface PermissionRuntimeStatus {
+  activeConsentReceipts?: number;
+  broker?: "reachable" | "not_running_or_unreachable";
+  policyPath?: string;
+  policyValid?: boolean;
+}
+
+export function renderPermissionStatus(
+  env: EnvLike = process.env,
+  policy?: PolicyValues,
+  runtime: PermissionRuntimeStatus = {},
+): string {
+  const enabled = (name: string, policyKey: PolicyKey) =>
+    policy?.[policyKey] ?? env[CAPABILITY_ENV[name]] === "1";
+  const state = (name: string, policyKey: PolicyKey) =>
+    enabled(name, policyKey) ? "enabled" : "disabled";
+  const snapshotDir =
+    env.SENSE_SNAPSHOT_DIR ??
+    path.join(os.tmpdir(), `sense-mcp-${process.getuid?.() ?? "user"}`, "snapshots");
   return [
-    `camera: ${state("camera")} (${CAPABILITY_ENV.camera})`,
-    `screen: ${state("screen")} (${CAPABILITY_ENV.screen})`,
-    `mic: ${state("mic")} (${CAPABILITY_ENV.mic})`,
-    `raw-titles: ${state("raw-titles")} (${CAPABILITY_ENV["raw-titles"]})`,
+    `calendar: ${state("calendar", "calendar")}`,
+    `location: ${state("location", "location")}`,
+    `camera: ${state("camera", "camera_snapshot")}`,
+    `window: ${state("screen", "window_snapshot")}`,
+    `full-screen: ${state("full-screen", "full_screen_snapshot")}`,
+    `mic: ${state("mic", "mic_level")}`,
+    `raw-titles: ${state("raw-titles", "raw_titles")}`,
     `workspace: ${env.SENSE_WORKSPACE_ROOTS ? "enabled" : "disabled"} (SENSE_WORKSPACE_ROOTS)`,
-    `snapshot-dir: ${env.SENSE_SNAPSHOT_DIR ?? path.join(os.tmpdir(), "sense-mcp", "snapshots")}`,
+    `snapshot-dir: ${snapshotDir}`,
+    "capture-consent: required (local allow-once confirmation; short-lived single-use receipt)",
+    `active-consent-receipts: ${runtime.activeConsentReceipts ?? "not checked"}`,
+    `broker: ${runtime.broker ?? "shared per-user; live state not checked"}`,
+    `policy: ${
+      runtime.policyPath
+        ? `${runtime.policyValid === false ? "invalid; protected capabilities fail closed at" : "loaded from"} ${runtime.policyPath}`
+        : "central private policy; path not checked"
+    }`,
+    "model-egress: controlled by the MCP client and model provider, not guaranteed local by Sense",
   ].join("\n");
+}
+
+export type PairingLinkWriter = (value: string) => Promise<void>;
+
+function writeClipboard(value: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("/usr/bin/pbcopy", [], { stdio: ["pipe", "ignore", "ignore"] });
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish(new Error("Clipboard handoff timed out"));
+    }, 2_000);
+    child.once("error", finish);
+    child.stdin.once("error", finish);
+    child.once("close", (code) =>
+      finish(code === 0 ? undefined : new Error("Clipboard handoff failed")),
+    );
+    child.stdin.end(value);
+  });
+}
+
+export async function handoffPairingLink(
+  pairingUrl: string,
+  writer: PairingLinkWriter = writeClipboard,
+): Promise<string> {
+  if (!pairingUrl.startsWith("sense://pair?") || pairingUrl.length > 4_096) {
+    return "iPhone pairing link is unavailable; rerun the LAN settings command after checking bridge setup.";
+  }
+  try {
+    await writer(pairingUrl);
+    return "iPhone pairing link copied to clipboard.";
+  } catch {
+    return "iPhone pairing link could not be copied; rerun the LAN settings command after clipboard access is restored.";
+  }
 }
 
 function usage(): string {
@@ -315,10 +407,11 @@ function usage(): string {
     "  permissions",
     "  doctor",
     "  ledger",
+    "  consent [list|revoke <receipt-id|all>]",
     "  settings [--open] [--port <number>] [--lan] [--lan-port <number>]",
     "  panel [--open] [--port <number>] [--lan] [--lan-port <number>]",
-    "  enable <camera|screen|mic|raw-titles|workspace> [value]",
-    "  disable <camera|screen|mic|raw-titles|workspace>",
+    "  enable <calendar|location|camera|screen|window|full-screen|mic|raw-titles|workspace> [value]",
+    "  disable <calendar|location|camera|screen|window|full-screen|mic|raw-titles|workspace>",
   ].join("\n");
 }
 
@@ -335,7 +428,7 @@ function initUsage(): string {
     "  --command <command>              Advanced: command to run instead of node",
     "  --arg <value>                    Advanced: append command argument",
     "  --camera, --enable-camera        Enable explicit camera snapshots",
-    "  --screen, --enable-screen        Enable explicit screen snapshots",
+    "  --screen, --enable-screen        Enable explicit app-window snapshots",
     "  --mic, --enable-mic              Enable one-second mic level sampling",
     "  --workspace <path>               Enable workspace context for a root",
     "  --snapshot-dir <path>            Use a custom private snapshot directory",
@@ -399,7 +492,21 @@ export async function runCli(argv: string[]): Promise<number> {
     const codexEnv = await readFile(configPath, "utf8")
       .then(parseSenseEnvFromToml)
       .catch(() => process.env);
-    console.log(renderPermissionStatus({ ...process.env, ...codexEnv }));
+    const mergedEnv = { ...process.env, ...codexEnv };
+    const [{ listConsentReceipts }, broker, policy] = await Promise.all([
+      import("./consent.js"),
+      existingBrokerStatus(),
+      loadSensePolicy(mergedEnv),
+    ]);
+    const activeConsentReceipts = await listConsentReceipts().then((items) => items.length).catch(() => 0);
+    console.log(
+      renderPermissionStatus(mergedEnv, policy.values, {
+        activeConsentReceipts,
+        broker,
+        policyPath: policy.path,
+        policyValid: policy.valid,
+      }),
+    );
     return 0;
   }
 
@@ -430,6 +537,31 @@ export async function runCli(argv: string[]): Promise<number> {
     return 0;
   }
 
+  if (command === "consent") {
+    const { listConsentReceipts, revokeAllConsent, revokeConsent, consentDirectory } = await import("./consent.js");
+    if (!capability || capability === "list") {
+      const receipts = await listConsentReceipts();
+      console.log(`Sense capture consent: ${consentDirectory()}`);
+      if (receipts.length === 0) {
+        console.log("No active receipts.");
+        return 0;
+      }
+      for (const receipt of receipts) {
+        console.log(
+          `${receipt.id} ${receipt.media_kind}/${receipt.scope} target=${receipt.target} expires=${receipt.expires_at}`,
+        );
+      }
+      return 0;
+    }
+    if (capability !== "revoke" || !value) {
+      console.error("Usage: sense-mcp consent [list|revoke <receipt-id|all>]");
+      return 1;
+    }
+    const removed = value === "all" ? await revokeAllConsent() : Number(await revokeConsent(value));
+    console.log(removed > 0 ? `Revoked ${removed} consent receipt(s).` : "No matching active consent receipt.");
+    return 0;
+  }
+
   if (command === "panel" || command === "settings" || command === "tray") {
     const open = argv.includes("--open");
     const lanBridge = argv.includes("--lan");
@@ -451,10 +583,13 @@ export async function runCli(argv: string[]): Promise<number> {
     const { startPanel } = await import("./panel.js");
     const panel = await startPanel({ open, port, lanBridge, lanPort });
     console.log(`Sense panel running at ${panel.url}`);
+    if (!open) {
+      console.log(`Private panel launcher: ${panel.launcherPath}`);
+      console.log("Open that protected file, or rerun with --open.");
+    }
     if (panel.lanBridge) {
       console.log(`iPhone LAN bridge running at ${panel.lanBridge.url}`);
-      console.log(`Bridge token: ${panel.lanBridge.token}`);
-      console.log("Paste the URL and token into the Sense iPhone app.");
+      console.log(await handoffPairingLink(panel.lanBridge.pairingUrl));
     }
     console.log("Press Ctrl+C to stop.");
     return new Promise<number>(() => undefined);
@@ -482,7 +617,28 @@ export async function runCli(argv: string[]): Promise<number> {
     return 1;
   }
 
+  const policyKey = capabilityPolicyKey(capability);
+  if (policyKey) {
+    await updateSensePolicy({ [policyKey]: command === "enable" });
+    await updateCodexConfig(key, command === "enable" ? "1" : null).catch(() => undefined);
+    console.log(
+      `${command === "enable" ? "Enabled" : "Disabled"} ${capability} in central Sense policy.`,
+    );
+    return 0;
+  }
+
   await updateCodexConfig(key, command === "enable" ? value ?? "1" : null);
   console.log(`${command === "enable" ? "Enabled" : "Disabled"} ${capability}. Restart Codex.`);
   return 0;
+}
+
+async function existingBrokerStatus(): Promise<"reachable" | "not_running_or_unreachable"> {
+  try {
+    const { BrokerClient, defaultBrokerSocketPath } = await import("./broker.js");
+    const client = await BrokerClient.connect(defaultBrokerSocketPath(), { requestTimeoutMs: 300 });
+    await client.close();
+    return "reachable";
+  } catch {
+    return "not_running_or_unreachable";
+  }
 }

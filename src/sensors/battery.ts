@@ -30,10 +30,11 @@ export const batterySensor: Sensor = {
   name: "battery",
   intervalMs: 60_000,
   tier: 1,
+  domains: ["environment"],
   capability: "power",
   available: async () => isMac,
-  async sample(): Promise<Observation[]> {
-    const out = await run("pmset", ["-g", "batt"]);
+  async sample(signal): Promise<Observation[]> {
+    const out = await run("pmset", ["-g", "batt"], 3000, signal);
     if (!out) return [];
 
     const fields = parsePmsetBattery(out);

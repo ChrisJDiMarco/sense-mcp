@@ -15,14 +15,16 @@ const presenceSensor = sensor("idle", "presence", 1);
 const mockScreenSensor = sensor("mock", "screen_activity", 1);
 
 describe("computePrivacy", () => {
-  test("granted when active+yielding, denied when active but silent", () => {
+  test("reports consent compatibility separately from operational state", () => {
     const p = computePrivacy(
       [screenSensor, presenceSensor],
       { active: new Set(["active-window", "idle"]), yielding: new Set(["active-window"]) },
       { isMac: true, rawTitles: false, cameraSnapshot: false, screenSnapshot: false },
     );
     expect(p.capabilities.screen_activity).toBe("granted");
-    expect(p.capabilities.presence).toBe("denied");
+    expect(p.capabilities.presence).toBe("granted");
+    expect(p.capability_states?.screen_activity).toBe("healthy");
+    expect(p.capability_states?.presence).toBe("no_signal");
     expect(p.tier).toBe(1);
   });
 
@@ -47,8 +49,10 @@ describe("computePrivacy", () => {
     );
 
     expect(p.capabilities.presence).toBe("denied");
+    expect(p.capability_states?.presence).toBe("permission_denied");
     expect(p.capability_details?.presence).toEqual({
       sensor: "idle",
+      state: "permission_denied",
       reason: "permission_denied",
       detail: "Presence sensor is not yielding.",
       fix_hint: "Grant permission.",
@@ -62,6 +66,7 @@ describe("computePrivacy", () => {
       { isMac: false, rawTitles: false, cameraSnapshot: false, screenSnapshot: false },
     );
     expect(p.capabilities.screen_activity).toBe("unavailable");
+    expect(p.capability_states?.screen_activity).toBe("unavailable");
     expect(p.capabilities.raw_window_titles).toBe("unavailable");
     expect(p.tier).toBe(0);
   });
@@ -78,6 +83,7 @@ describe("computePrivacy", () => {
       screenSnapshot: false,
     });
     expect(denied.capabilities.raw_window_titles).toBe("denied");
+    expect(denied.capability_states?.raw_window_titles).toBe("disabled");
 
     const granted = computePrivacy([screenSensor], status, {
       isMac: true,
@@ -86,6 +92,7 @@ describe("computePrivacy", () => {
       screenSnapshot: false,
     });
     expect(granted.capabilities.raw_window_titles).toBe("granted");
+    expect(granted.capability_states?.raw_window_titles).toBe("healthy");
     expect(granted.tier).toBe(3);
   });
 
@@ -96,6 +103,7 @@ describe("computePrivacy", () => {
       { isMac: true, rawTitles: false, cameraSnapshot: false, screenSnapshot: false },
     );
     expect(p.capabilities.camera_attention).toBe("unavailable");
+    expect(p.capability_states?.camera_attention).toBe("unavailable");
   });
 
   test("camera snapshot is denied until explicit opt-in", () => {
@@ -109,6 +117,7 @@ describe("computePrivacy", () => {
       screenSnapshot: false,
     });
     expect(denied.capabilities.camera_snapshot).toBe("denied");
+    expect(denied.capability_states?.camera_snapshot).toBe("disabled");
 
     const granted = computePrivacy([cameraSensor], status, {
       isMac: true,
@@ -117,16 +126,25 @@ describe("computePrivacy", () => {
       screenSnapshot: false,
     });
     expect(granted.capabilities.camera_snapshot).toBe("granted");
+    expect(granted.capability_states?.camera_snapshot).toBe("healthy");
     expect(granted.tier).toBe(3);
   });
 
   test("merges duplicate capability sensors without downgrading granted status", () => {
     const p = computePrivacy(
       [screenSensor, mockScreenSensor],
-      { active: new Set(["active-window"]), yielding: new Set(["active-window"]) },
+      {
+        active: new Set(["active-window", "mock"]),
+        yielding: new Set(["active-window"]),
+        diagnostics: new Map([
+          ["mock", { reason: "sample_error", detail: "Mock sensor failed." }],
+        ]),
+      },
       { isMac: true, rawTitles: false, cameraSnapshot: false, screenSnapshot: false },
     );
     expect(p.capabilities.screen_activity).toBe("granted");
+    expect(p.capability_states?.screen_activity).toBe("healthy");
+    expect(p.capability_details?.screen_activity).toBeUndefined();
   });
 
   test("screen snapshot is explicit opt-in", () => {
@@ -137,6 +155,7 @@ describe("computePrivacy", () => {
       screenSnapshot: false,
     });
     expect(denied.capabilities.screen_snapshot).toBe("denied");
+    expect(denied.capability_states?.screen_snapshot).toBe("disabled");
 
     const granted = computePrivacy([], { active: new Set(), yielding: new Set() }, {
       isMac: true,
@@ -145,6 +164,22 @@ describe("computePrivacy", () => {
       screenSnapshot: true,
     });
     expect(granted.capabilities.screen_snapshot).toBe("granted");
+    expect(granted.capability_states?.screen_snapshot).toBe("no_signal");
     expect(granted.tier).toBe(3);
+  });
+
+  test("full-screen capture remains disabled when only window capture is enabled", () => {
+    const privacy = computePrivacy([], { active: new Set(), yielding: new Set() }, {
+      isMac: true,
+      rawTitles: false,
+      cameraSnapshot: false,
+      screenSnapshot: true,
+      windowSnapshot: true,
+      fullScreenSnapshot: false,
+    });
+
+    expect(privacy.capabilities.window_snapshot).toBe("granted");
+    expect(privacy.capability_states?.full_screen_snapshot).toBe("disabled");
+    expect(privacy.capabilities.full_screen_snapshot).toBe("denied");
   });
 });

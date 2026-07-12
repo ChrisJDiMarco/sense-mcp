@@ -1,9 +1,16 @@
 import { execFile } from "node:child_process";
 
+const TEXT_MAX_BUFFER = 256 * 1024;
+
 /** Run a command, return trimmed stdout, or null on any failure. */
-export function run(cmd: string, args: string[], timeoutMs = 3000): Promise<string | null> {
+export function run(
+  cmd: string,
+  args: string[],
+  timeoutMs = 3000,
+  signal?: AbortSignal,
+): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: timeoutMs }, (err, stdout) => {
+    execFile(cmd, args, { timeout: timeoutMs, maxBuffer: TEXT_MAX_BUFFER, signal }, (err, stdout) => {
       resolve(err ? null : stdout.trim());
     });
   });
@@ -23,9 +30,14 @@ export function runCapture(
   cmd: string,
   args: string[],
   timeoutMs = 3000,
+  signal?: AbortSignal,
 ): Promise<CommandResult | null> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
+    execFile(
+      cmd,
+      args,
+      { timeout: timeoutMs, maxBuffer: TEXT_MAX_BUFFER, signal },
+      (err, stdout, stderr) => {
       resolve({
         stdout: stdout.trim(),
         stderr: stderr.trim(),
@@ -34,7 +46,8 @@ export function runCapture(
         signal: err?.signal,
         errorMessage: err?.message,
       });
-    });
+      },
+    );
   });
 }
 
@@ -44,12 +57,13 @@ export function runBuffer(
   args: string[],
   timeoutMs = 8000,
   maxBuffer = 8 * 1024 * 1024,
+  signal?: AbortSignal,
 ): Promise<Buffer | null> {
   return new Promise((resolve) => {
     execFile(
       cmd,
       args,
-      { timeout: timeoutMs, maxBuffer, encoding: "buffer" },
+      { timeout: timeoutMs, maxBuffer, encoding: "buffer", signal },
       (err, stdout) => {
         if (err || !stdout || stdout.length === 0) {
           resolve(null);

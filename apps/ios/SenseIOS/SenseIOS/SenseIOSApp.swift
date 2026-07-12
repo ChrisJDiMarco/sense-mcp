@@ -11,8 +11,10 @@ struct SenseIOSApp: App {
                 .environmentObject(store)
                 .environmentObject(sensors)
                 .onOpenURL { url in
-                    guard url.scheme == "sense" else { return }
-                    if url.host == "checkin" {
+                    guard url.scheme?.lowercased() == "sense" else { return }
+                    if url.host?.lowercased() == "pair" {
+                        store.stagePairingLink(url)
+                    } else if url.host?.lowercased() == "checkin" {
                         store.activateCheckInFromShortcut()
                     }
                 }

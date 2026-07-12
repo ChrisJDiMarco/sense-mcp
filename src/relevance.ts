@@ -53,10 +53,13 @@ export interface RelevantContextPlan {
     | "get_environment_context"
     | "get_schedule_context"
     | "take_camera_snapshot"
-    | "take_screen_snapshot";
+    | "take_window_snapshot"
+    | "take_full_screen_snapshot";
   relevant_domains: Domain[];
   recommended_tools: string[];
+  follow_up_tools: string[];
   avoided_tools: string[];
+  context_satisfied: boolean;
   requires_explicit_media: boolean;
   snapshot_mode?: SnapshotMode;
   context_plan: ContextPlan;
@@ -104,6 +107,7 @@ function isCurrentScreenRequest(text: string): boolean {
   return includesAny(text, [
     /\bon my screen\b/,
     /\bmy screen\b/,
+    /\bmy (full|entire|whole) screen\b/,
     /\bthis screen\b/,
     /\bcurrent screen\b/,
     /\bthis ui\b/,
@@ -126,6 +130,18 @@ function isCurrentScreenRequest(text: string): boolean {
     /\breview this\b.*\b(screen|ui|page|layout)\b/,
     /\bsummarize this\b.*\b(screen|page|ui)\b/,
   ]);
+}
+
+function isExplicitFullScreenRequest(text: string): boolean {
+  return includesAny(text, [
+    /\b(full|entire|whole) screen\b/,
+    /\bmain display\b/,
+    /\bentire desktop\b/,
+  ]);
+}
+
+function isAllDisplaysRequest(text: string): boolean {
+  return /\ball (my )?displays\b/.test(text);
 }
 
 function isPhysicalDeicticRequest(text: string): boolean {
@@ -210,9 +226,11 @@ function isExplicitContextRequest(text: string): boolean {
   ]);
 }
 
-function withDefaults(plan: Omit<RelevantContextPlan, "avoided_tools" | "fallbacks" | "privacy_notes" | "requires_explicit_media" | "context_plan"> & {
+function withDefaults(plan: Omit<RelevantContextPlan, "avoided_tools" | "context_satisfied" | "fallbacks" | "follow_up_tools" | "privacy_notes" | "requires_explicit_media" | "context_plan"> & {
   avoided_tools?: string[];
+  context_satisfied?: boolean;
   fallbacks?: string[];
+  follow_up_tools?: string[];
   privacy_notes?: string[];
   requires_explicit_media?: boolean;
   context_plan?: Partial<ContextPlan> & {
@@ -220,7 +238,9 @@ function withDefaults(plan: Omit<RelevantContextPlan, "avoided_tools" | "fallbac
   };
 }): RelevantContextPlan {
   const usesCamera = plan.recommended_tools.includes("take_camera_snapshot");
-  const usesScreen = plan.recommended_tools.includes("take_screen_snapshot");
+  const usesWindow = plan.recommended_tools.includes("take_window_snapshot");
+  const usesFullScreen = plan.recommended_tools.includes("take_full_screen_snapshot");
+  const usesScreen = usesWindow || usesFullScreen;
   const planOnly = plan.minimum_tool === "none";
   const budgetMode: ContextBudgetMode = planOnly
     ? "none"
@@ -241,7 +261,8 @@ function withDefaults(plan: Omit<RelevantContextPlan, "avoided_tools" | "fallbac
     ...(plan.relevant_domains.includes("environment") ? [] : ["environment_domain"]),
     ...(plan.relevant_domains.includes("schedule") ? [] : ["schedule_domain"]),
     ...(usesCamera ? [] : ["camera_snapshot"]),
-    ...(usesScreen ? [] : ["screen_snapshot"]),
+    ...(usesWindow ? [] : ["window_snapshot"]),
+    ...(usesFullScreen ? [] : ["full_screen_snapshot"]),
   ];
   const contextPlan: ContextPlan = {
     expected_value: planOnly ? "none" : usesCamera || usesScreen ? "high" : "medium",
@@ -266,11 +287,15 @@ function withDefaults(plan: Omit<RelevantContextPlan, "avoided_tools" | "fallbac
   return {
     ...plan,
     context_plan: contextPlan,
+    context_satisfied: plan.context_satisfied ?? planOnly,
+    follow_up_tools: plan.follow_up_tools ?? (planOnly ? [] : [...plan.recommended_tools]),
     avoided_tools:
       plan.avoided_tools ??
       [
         ...(usesCamera ? [] : ["take_camera_snapshot"]),
-        ...(usesScreen ? [] : ["take_screen_snapshot"]),
+        ...(usesWindow ? [] : ["take_window_snapshot"]),
+        ...(usesFullScreen ? [] : ["take_full_screen_snapshot"]),
+        "take_screen_snapshot",
       ],
     requires_explicit_media: plan.requires_explicit_media ?? (usesCamera || usesScreen),
     fallbacks:
@@ -302,7 +327,12 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
       minimum_tool: "none",
       relevant_domains: [],
       recommended_tools: [],
-      avoided_tools: ["take_camera_snapshot", "take_screen_snapshot"],
+      avoided_tools: [
+        "take_camera_snapshot",
+        "take_window_snapshot",
+        "take_full_screen_snapshot",
+        "take_screen_snapshot",
+      ],
       guidance: [
         "Do not capture or read private messages, keystrokes, or ongoing screen content.",
         "Explain the privacy boundary and offer a safer alternative such as asking the user to paste selected text.",
@@ -329,7 +359,12 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
       minimum_tool: "none",
       relevant_domains: [],
       recommended_tools: [],
-      avoided_tools: ["take_camera_snapshot", "take_screen_snapshot"],
+      avoided_tools: [
+        "take_camera_snapshot",
+        "take_window_snapshot",
+        "take_full_screen_snapshot",
+        "take_screen_snapshot",
+      ],
       guidance: ["Do not use camera or screen tools for this writing request unless the user changes the request."],
       fallbacks: ["Proceed from the text the user supplied and ask for pasted context only if needed."],
       privacy_notes: ["The user explicitly constrained media use; honor that constraint."],
@@ -364,7 +399,7 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
         "Inspect snapshot_path before answering.",
       ],
       fallbacks: [
-        "If camera is disabled, tell the user to enable SENSE_CAMERA_SNAPSHOT=1 or use the Sense panel.",
+        "If camera is disabled, tell the user to run sense-mcp enable camera or use the Sense panel.",
         "If capture is denied, point to macOS Camera privacy permissions.",
       ],
       privacy_notes: ["explicit camera use is justified only because this is a current visual appearance request."],
@@ -379,22 +414,56 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
     });
   }
 
-  if (isCurrentScreenRequest(text)) {
+  if (isAllDisplaysRequest(text)) {
     return withDefaults({
       intent: "screen_debug",
       confidence: "high",
-      minimum_tool: "take_screen_snapshot",
+      minimum_tool: "none",
+      relevant_domains: [],
+      recommended_tools: [],
+      guidance: [
+        "Sense does not combine every display into one capture. Its full-screen tool captures only the main display.",
+        "Ask the user to request the main display or identify individual app windows instead of implying all displays were captured.",
+      ],
+      fallbacks: ["Capture the main display or individual windows only after the user chooses that narrower scope."],
+      privacy_notes: ["Do not widen a main-display or window consent receipt to other displays."],
+      context_plan: {
+        expected_value: "none",
+        plan_only: true,
+        include_frame: false,
+        include_situation: false,
+        reason: "The requested all-display capture is outside Sense's bounded media scope.",
+      },
+    });
+  }
+
+  if (isCurrentScreenRequest(text)) {
+    const fullScreen = isExplicitFullScreenRequest(text);
+    const screenTool = fullScreen ? "take_full_screen_snapshot" : "take_window_snapshot";
+    return withDefaults({
+      intent: "screen_debug",
+      confidence: "high",
+      minimum_tool: screenTool,
       relevant_domains: ["screen"],
-      recommended_tools: ["take_screen_snapshot"],
+      recommended_tools: [screenTool],
       snapshot_mode: includesAny(text, [/\bui\b/, /\bdesign\b/, /\blayout\b/])
         ? "ui_feedback"
-        : "screen_debug",
+        : fullScreen
+          ? "screen_summary"
+          : "screen_debug",
       guidance: [
-        "Use an explicit screen snapshot because the user referenced current on-screen content.",
+        fullScreen
+          ? "Use the higher-risk full-screen action only because the user explicitly asked for the entire main screen."
+          : "Use a CoreGraphics window-id capture because the target app window is the subject and capture must not interrupt focus.",
+        fullScreen
+          ? "Require explicit full-screen confirmation before capture."
+          : "Identify the target app window and pass its numeric CoreGraphics window id.",
         "Inspect snapshot_path before answering.",
       ],
       fallbacks: [
-        "If screen capture is disabled, tell the user to enable SENSE_SCREEN_SNAPSHOT=1 or use the Sense panel.",
+        fullScreen
+          ? "If main-display capture is disabled, tell the user to run sense-mcp enable full-screen or use the Sense panel."
+          : "If window capture is disabled, tell the user to run sense-mcp enable window or use the Sense panel.",
         "If capture is denied, point to macOS Screen Recording permissions.",
       ],
       privacy_notes: ["Avoid reading private messages or secrets from the screenshot; summarize only what is needed for the request."],
@@ -403,8 +472,10 @@ export function planRelevantContext(userRequest: string): RelevantContextPlan {
         budget: { mode: "visual", max_tokens: 120 },
         include_frame: false,
         include_situation: false,
-        included_context: ["screen_snapshot"],
-        reason: "The user referenced current visible screen content.",
+        included_context: [fullScreen ? "full_screen_snapshot" : "window_snapshot"],
+        reason: fullScreen
+          ? "The user explicitly requested the entire screen, so the higher-risk full-screen action is justified after confirmation."
+          : "The user referenced current visible app content; capture only the identified app window without changing focus.",
       },
     });
   }

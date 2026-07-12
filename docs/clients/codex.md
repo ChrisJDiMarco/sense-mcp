@@ -37,12 +37,19 @@ args = ["/absolute/path/to/sense-mcp/dist/index.js"]
 startup_timeout_sec = 20
 
 [mcp_servers.sense.env]
-SENSE_CAMERA_SNAPSHOT = "1"
-SENSE_SCREEN_SNAPSHOT = "1"
 SENSE_WORKSPACE_ROOTS = "/absolute/path/to/workspace"
 ```
 
-Restart Codex after editing this file.
+Environment flags remain migration fallbacks. Prefer central policy after the
+first start:
+
+```bash
+sense-mcp enable camera
+sense-mcp enable screen
+```
+
+Policy changes hot-reload in the shared broker. Restart Codex only for MCP
+config or macOS host-permission changes.
 
 ## Suggested Codex Guidance
 
@@ -54,9 +61,14 @@ Use Sense when local context would materially improve the answer. Start with
 get_relevant_context for ambiguous requests. If context_plan.plan_only is true
 or expected_value is none, answer normally without fetching a ContextFrame. For
 visual appearance prompts, use take_camera_snapshot and inspect snapshot_path
-before answering. For visible screen/UI/debug prompts, use take_screen_snapshot
-and inspect snapshot_path before answering. Do not use camera or screen tools
-for ordinary writing, planning, or coding prompts.
+before answering. For local Mac app visual QA, prefer CoreGraphics window-id
+capture with screencapture so focus is not interrupted. For visible
+screen/UI/debug prompts, use take_window_snapshot for one app window, then
+inspect snapshot_path before answering. take_screen_snapshot is a deprecated
+window-only alias. Use take_full_screen_snapshot only for an explicit request
+for the main display. Do not use camera or screen tools for ordinary writing,
+planning, or coding prompts. Expect a local allow-once confirmation before each
+capture.
 ```
 
 ## Troubleshooting
@@ -70,10 +82,11 @@ sense-mcp settings --open
 
 Common fixes:
 
-- Restart Codex after config changes.
+- Restart Codex after MCP config or macOS host-permission changes. Central Sense
+  policy hot-reloads.
 - Grant Camera permission to the app process that runs the MCP server.
 - Grant Screen Recording permission for screen snapshots.
 - Install `ffmpeg` with `brew install ffmpeg`.
-- Use a direct Calendar connector for account schedule data when available;
-  Sense's local Calendar sensor is a fallback and will report diagnostics if
-  macOS Calendar automation times out.
+- Install optional `icalBuddy` and run `sense-mcp enable calendar` for headless
+  local schedule timing. Sense never launches Calendar.app. Use a direct
+  Calendar connector for account-backed data.

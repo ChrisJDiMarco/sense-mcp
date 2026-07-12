@@ -25,10 +25,11 @@ export const ambientLightSensor: Sensor = {
   name: "ambient-light",
   intervalMs: 30_000,
   tier: 2,
+  domains: ["environment"],
   capability: "ambient_light",
   available: async () => isMac,
-  async sample(): Promise<Observation[]> {
-    const out = await run("ioreg", ["-r", "-c", "AppleLMUController", "-d", "1"], 3000);
+  async sample(signal): Promise<Observation[]> {
+    const out = await run("ioreg", ["-r", "-c", "AppleLMUController", "-d", "1"], 3000, signal);
     if (!out) {
       lastAmbientLightDiagnostic = {
         reason: "ambient_light_not_exposed",
