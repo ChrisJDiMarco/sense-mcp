@@ -94,14 +94,16 @@ export const workspaceSensor: Sensor = {
   name: "workspace",
   intervalMs: 30_000,
   tier: 1,
+  domains: ["screen"],
   capability: "workspace_state",
   available: async () => workspaceRoots().length > 0,
-  async sample(): Promise<Observation[]> {
+  async sample(signal): Promise<Observation[]> {
     const root = workspaceRoots()[0];
     if (!root) return [];
 
-    const status = await run("git", ["-C", root, "status", "--short", "--branch"], 3000);
+    const status = await run("git", ["-C", root, "status", "--short", "--branch"], 3000, signal);
     if (!status) return [];
+    if (signal?.aborted) return [];
 
     const packageJson = await readFile(path.join(root, "package.json"), "utf8").catch(() => undefined);
     const packageManager = await packageManagerFor(root);

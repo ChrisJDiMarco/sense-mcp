@@ -21,8 +21,6 @@ Merge the printed JSON into `claude_desktop_config.json`.
       "command": "node",
       "args": ["/absolute/path/to/sense-mcp/dist/index.js"],
       "env": {
-        "SENSE_CAMERA_SNAPSHOT": "1",
-        "SENSE_SCREEN_SNAPSHOT": "1",
         "SENSE_WORKSPACE_ROOTS": "/absolute/path/to/workspace"
       }
     }
@@ -36,11 +34,16 @@ Restart Claude Desktop after editing config.
 
 - Start with `get_relevant_context`; if `context_plan.plan_only` is true, answer
   normally without fetching a ContextFrame.
-- Camera and screen snapshots are disabled unless the env vars are set.
+- Camera, app-window, and full-screen snapshots are disabled until central
+  policy enables the exact capability.
 - Claude still needs to call the snapshot tool and inspect the returned image.
-- Use the Sense panel from a terminal if you want to toggle capabilities:
+- Every media call shows a local allow-once confirmation. Use
+  `take_window_snapshot` by default; `take_screen_snapshot` is its deprecated
+  window-only alias.
+Use the Sense panel or CLI from a terminal to inspect and change policy:
 
 ```bash
 sense-mcp ledger
 sense-mcp settings --open
+sense-mcp enable screen
 ```

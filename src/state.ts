@@ -64,14 +64,38 @@ function safeTimelineLabel(obs: Observation): string | null {
  * Expired observations are dropped on read. Nothing is ever persisted.
  */
 export class StateStore {
-  private latest = new Map<string, Observation>();
+  /** Latest field readings per sensor+domain, preserving each field's own expiry. */
+  private latest = new Map<
+    string,
+    {
+      sensor: string;
+      domain: Domain;
+      fields: Map<string, { value: string | number | boolean; observedAt: number; expiresAt: number }>;
+    }
+  >();
   private historyLog: Observation[] = [];
   private timelineLog: TimelineEvent[] = [];
 
   ingest(observations: Observation[], now: number = Date.now()): void {
     for (const obs of observations) {
       if (obs.observedAt + obs.ttlMs <= now) continue; // dead on arrival
-      this.latest = new Map(this.latest).set(obs.sensor, obs);
+      const key = `${obs.sensor}\u0000${obs.domain}`;
+      const previous = this.latest.get(key);
+      const fields = new Map(previous?.fields ?? []);
+      for (const [field, value] of Object.entries(obs.fields)) {
+        const current = fields.get(field);
+        if (current && current.observedAt > obs.observedAt) continue;
+        fields.set(field, {
+          value,
+          observedAt: obs.observedAt,
+          expiresAt: obs.observedAt + obs.ttlMs,
+        });
+      }
+      this.latest = new Map(this.latest).set(key, {
+        sensor: obs.sensor,
+        domain: obs.domain,
+        fields,
+      });
       this.historyLog = [...this.historyLog, obs];
       const label = safeTimelineLabel(obs);
       if (label) {
@@ -94,12 +118,32 @@ export class StateStore {
 
   /** Live observations, optionally filtered by domain. Prunes expired. */
   live(domain?: Domain, now: number = Date.now()): Observation[] {
-    const alive = new Map<string, Observation>();
+    const alive = new Map<string, (typeof this.latest extends Map<string, infer V> ? V : never)>();
     const result: Observation[] = [];
-    for (const [key, obs] of this.latest) {
-      if (obs.observedAt + obs.ttlMs <= now) continue;
-      alive.set(key, obs);
-      if (!domain || obs.domain === domain) result.push(obs);
+    for (const [key, reading] of this.latest) {
+      const fields = new Map(
+        [...reading.fields].filter(([, field]) => field.expiresAt > now),
+      );
+      if (fields.size === 0) continue;
+      const next = { ...reading, fields };
+      alive.set(key, next);
+      if (!domain || reading.domain === domain) {
+        const values: Record<string, string | number | boolean> = {};
+        let oldest = now;
+        let earliestExpiry = Number.POSITIVE_INFINITY;
+        for (const [field, value] of fields) {
+          values[field] = value.value;
+          oldest = Math.min(oldest, value.observedAt);
+          earliestExpiry = Math.min(earliestExpiry, value.expiresAt);
+        }
+        result.push({
+          sensor: reading.sensor,
+          domain: reading.domain,
+          fields: values,
+          observedAt: oldest,
+          ttlMs: Math.max(1, earliestExpiry - oldest),
+        });
+      }
     }
     this.latest = alive;
     this.pruneHistory(now);
@@ -122,6 +166,34 @@ export class StateStore {
     return this.timelineLog
       .filter((event) => now - event.observedAt <= windowMs)
       .sort((a, b) => a.observedAt - b.observedAt);
+  }
+
+  /** Immediately forget all cached and historical data from a revoked sensor. */
+  removeSensor(sensor: string): void {
+    this.latest = new Map([...this.latest].filter(([, reading]) => reading.sensor !== sensor));
+    this.historyLog = this.historyLog.filter((observation) => observation.sensor !== sensor);
+    this.timelineLog = this.timelineLog.filter((event) => event.sensor !== sensor);
+  }
+
+  /** Immediately forget one field while retaining the sensor's non-sensitive fields. */
+  removeSensorField(sensor: string, field: string): void {
+    const latest = new Map(this.latest);
+    for (const [key, reading] of latest) {
+      if (reading.sensor !== sensor || !reading.fields.has(field)) continue;
+      const fields = new Map(reading.fields);
+      fields.delete(field);
+      if (fields.size === 0) latest.delete(key);
+      else latest.set(key, { ...reading, fields });
+    }
+    this.latest = latest;
+    this.historyLog = this.historyLog
+      .map((observation) => {
+        if (observation.sensor !== sensor || !(field in observation.fields)) return observation;
+        const fields = { ...observation.fields };
+        delete fields[field];
+        return { ...observation, fields };
+      })
+      .filter((observation) => Object.keys(observation.fields).length > 0);
   }
 
   clear(): void {

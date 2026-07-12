@@ -68,6 +68,7 @@ enum BridgeStatus: Equatable {
     case idle
     case savedLocally
     case sending
+    case paired
     case connected
     case sent
     case receiptError(String)
@@ -79,6 +80,7 @@ enum BridgeStatus: Equatable {
         case .idle: return "Ready"
         case .savedLocally: return "Saved locally"
         case .sending: return "Sending"
+        case .paired: return "Paired securely"
         case .connected: return "Bridge ready"
         case .sent: return "Accepted by Mac"
         case .receiptError: return "Saved locally, receipt mismatch"
@@ -169,6 +171,14 @@ struct BridgeReceipt: Codable, Equatable {
         guard let receipt_id else { return "local" }
         return String(receipt_id.prefix(8))
     }
+}
+
+struct BridgeEnvelope: Codable, Equatable {
+    var version: Int
+    var timestamp: Int64
+    var nonce: String
+    var ciphertext: String
+    var tag: String
 }
 
 struct CheckIn: Identifiable, Codable, Equatable {

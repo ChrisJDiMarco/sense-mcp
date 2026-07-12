@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
   buildInitConfig,
+  capabilityPolicyKey,
+  handoffPairingLink,
   parseSenseEnvFromToml,
   renderClaudeDesktopInitConfig,
   renderCodexInitBlock,
@@ -9,6 +11,7 @@ import {
   setSenseEnvInToml,
   upsertCodexSenseServer,
 } from "../src/cli.js";
+import type { PolicyValues } from "../src/policy.js";
 import { renderDoctorReport, type DoctorReport } from "../src/doctor.js";
 
 const baseToml = `model = "gpt-5.5"
@@ -74,6 +77,67 @@ describe("renderPermissionStatus", () => {
     expect(rendered).toContain("camera: enabled");
     expect(rendered).toContain("screen: disabled");
     expect(rendered).toContain("mic: disabled");
+    expect(rendered).toContain("capture-consent: required");
+    expect(rendered).toContain("model-egress: controlled by the MCP client and model provider");
+    expect(rendered).not.toContain("local-only model");
+  });
+
+  test("renders authoritative central policy values and runtime state", () => {
+    const values: PolicyValues = {
+      calendar: true,
+      location: false,
+      mic_level: false,
+      camera_snapshot: false,
+      window_snapshot: true,
+      full_screen_snapshot: false,
+      raw_titles: false,
+    };
+    const rendered = renderPermissionStatus({}, values, {
+      policyPath: "/private/policy.json",
+      policyValid: true,
+      activeConsentReceipts: 2,
+      broker: "reachable",
+    });
+    expect(rendered).toContain("calendar: enabled");
+    expect(rendered).toContain("window: enabled");
+    expect(rendered).toContain("full-screen: disabled");
+    expect(rendered).toContain("active-consent-receipts: 2");
+    expect(rendered).toContain("broker: reachable");
+    expect(rendered).toContain("policy: loaded from /private/policy.json");
+  });
+});
+
+describe("central capability mapping", () => {
+  test("maps compatibility aliases onto one policy key", () => {
+    expect(capabilityPolicyKey("screen")).toBe("window_snapshot");
+    expect(capabilityPolicyKey("window")).toBe("window_snapshot");
+    expect(capabilityPolicyKey("full-screen")).toBe("full_screen_snapshot");
+    expect(capabilityPolicyKey("calendar")).toBe("calendar");
+  });
+});
+
+describe("iPhone pairing handoff", () => {
+  test("copies the secret through stdin but never includes it in terminal output", async () => {
+    const pairingUrl = "sense://pair?url=https%3A%2F%2Flocal&secret=top-secret";
+    let copied = "";
+    const message = await handoffPairingLink(pairingUrl, async (value) => {
+      copied = value;
+    });
+    expect(copied).toBe(pairingUrl);
+    expect(message).toBe("iPhone pairing link copied to clipboard.");
+    expect(message).not.toContain("top-secret");
+  });
+
+  test("uses a secret-free fallback when clipboard handoff fails", async () => {
+    const message = await handoffPairingLink(
+      "sense://pair?url=https%3A%2F%2Flocal&secret=top-secret",
+      async () => {
+        throw new Error("pbcopy failed: top-secret");
+      },
+    );
+    expect(message).toContain("could not be copied");
+    expect(message).toContain("rerun the LAN settings command");
+    expect(message).not.toContain("top-secret");
   });
 });
 

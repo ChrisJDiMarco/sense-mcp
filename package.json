@@ -1,7 +1,7 @@
 {
   "name": "sense-mcp",
   "version": "0.1.0",
-  "description": "A presence layer for AI — an MCP server that gives any AI client real-time, privacy-first awareness of the user's current context. Local-only, ephemeral, pull-based.",
+  "description": "A local-first MCP context broker for bounded, consent-gated situational awareness.",
   "license": "MIT",
   "author": "Chris DiMarco",
   "type": "module",
@@ -20,17 +20,12 @@
   "homepage": "https://github.com/ChrisJDiMarco/sense-mcp#readme",
   "files": [
     "dist",
-    "apps/ios/SenseIOS/SenseIOS",
-    "apps/ios/SenseIOS/SenseIOS.xcodeproj/project.pbxproj",
-    "apps/ios/SenseIOS/SenseIOS.xcodeproj/xcshareddata/xcschemes/SenseIOS.xcscheme",
-    "SPEC.md",
-    "README.md",
-    "LICENSE",
     "CHANGELOG.md",
     "CONTRIBUTING.md",
+    "ROADMAP.md",
     "SECURITY.md",
-    "scripts",
-    "docs",
+    "SPEC.md",
+    "docs/**/*.md",
     "examples"
   ],
   "scripts": {
@@ -41,9 +36,12 @@
     "eval:prompt-pack": "node scripts/eval-prompt-pack.cjs",
     "ios:build": "xcodebuild -project apps/ios/SenseIOS/SenseIOS.xcodeproj -scheme SenseIOS -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
-    "check": "npm run build && npm test && npm run eval:routing && npm run eval:prompt-pack && npm run audit:prod",
-    "release:dry-run": "npm run check && npm pack --dry-run",
+    "audit:all": "npm audit --audit-level=moderate",
+    "check:package": "node scripts/check-package.cjs",
+    "check": "npm run build && npm run test:coverage && npm run eval:routing && npm run eval:prompt-pack && npm run audit:prod && npm run audit:all",
+    "release:dry-run": "npm run check && npm run check:package",
     "prepublishOnly": "npm run check"
   },
   "keywords": [
@@ -59,16 +57,17 @@
     "ai"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "zod": "^3.23.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "tsx": "^4.0.0",
+    "@types/node": "^22.20.1",
+    "@vitest/coverage-v8": "^4.1.10",
+    "tsx": "^4.23.0",
     "typescript": "^5.4.0",
-    "vitest": "^2.0.0"
+    "vitest": "^4.1.10"
   }
 }

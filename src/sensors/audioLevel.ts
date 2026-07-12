@@ -1,9 +1,9 @@
 import type { Observation, Sensor, SensorDiagnostic } from "../types.js";
-import { isMac, runCapture } from "./exec.js";
+import { policyEnabled } from "../policy.js";
+import { isMac, runCapture, type CommandResult } from "./exec.js";
 
 const TTL_MS = 20_000;
 const SAMPLE_SECONDS = 1;
-let lastAudioDiagnostic: SensorDiagnostic | null = null;
 
 export interface AudioDevice {
   index: number;
@@ -39,11 +39,27 @@ export function parseAvfoundationAudioDevices(output: string): AudioDevice[] {
   return devices;
 }
 
-async function defaultAudioDeviceIndex(): Promise<string | null> {
-  const result = await runCapture(
+interface AudioLevelDependencies {
+  isMac: boolean;
+  policyEnabled: () => Promise<boolean>;
+  runCommand: (
+    command: string,
+    args: string[],
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ) => Promise<CommandResult | null>;
+  env: Record<string, string | undefined>;
+}
+
+async function defaultAudioDeviceIndex(
+  dependencies: AudioLevelDependencies,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const result = await dependencies.runCommand(
     "ffmpeg",
     ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
     5000,
+    signal,
   );
   if (!result) return null;
 
@@ -74,84 +90,112 @@ export function classifyNoise(db: number | null): string {
   return "noisy";
 }
 
-/** Opt-in microphone level only. No audio content is stored or returned. */
-export const audioLevelSensor: Sensor = {
-  name: "audio-level",
-  intervalMs: 30_000,
-  tier: 2,
-  capability: "microphone_level",
-  available: async () => isMac,
-  async sample(): Promise<Observation[]> {
-    if (process.env.SENSE_MIC_LEVEL !== "1") {
-      lastAudioDiagnostic = {
-        reason: "disabled_by_env",
-        detail: "Mic level sampling is disabled because SENSE_MIC_LEVEL is not 1.",
-        fixHint: "Run sense-mcp enable mic, restart the MCP client, and grant Microphone permission if prompted.",
-      };
-      return [];
-    }
+export function createAudioLevelSensor(
+  overrides: Partial<AudioLevelDependencies> = {},
+): Sensor {
+  const dependencies: AudioLevelDependencies = {
+    isMac,
+    policyEnabled: () => policyEnabled("mic_level"),
+    runCommand: runCapture,
+    env: process.env,
+    ...overrides,
+  };
+  let diagnostic: SensorDiagnostic | null = null;
 
-    const deviceIndex = process.env.SENSE_MIC_DEVICE_INDEX ?? (await defaultAudioDeviceIndex());
-    if (!deviceIndex) {
-      lastAudioDiagnostic = {
-        reason: "audio_device_unavailable",
-        detail: "No AVFoundation audio input device was found.",
-        fixHint: "Check macOS input devices or set SENSE_MIC_DEVICE_INDEX to a valid ffmpeg audio device.",
-      };
-      return [];
-    }
-    const result = await runCapture(
-      "ffmpeg",
-      [
-        "-hide_banner",
-        "-f",
-        "avfoundation",
-        "-t",
-        String(SAMPLE_SECONDS),
-        "-i",
-        `:${deviceIndex}`,
-        "-af",
-        "volumedetect",
-        "-f",
-        "null",
-        "-",
-      ],
-      5000,
-    );
-    if (!result || result.exitCode !== 0 || result.timedOut) {
-      lastAudioDiagnostic = {
-        reason: result?.timedOut ? "audio_level_timeout" : "audio_capture_failed",
-        detail: result?.stderr || result?.errorMessage || "Mic level capture failed.",
-        fixHint:
-          "Grant Microphone permission to the app running Sense, or set SENSE_MIC_DEVICE_INDEX to the built-in microphone.",
-      };
-      return [];
-    }
+  return {
+    name: "audio-level",
+    intervalMs: 30_000,
+    tier: 2,
+    capability: "microphone_level",
+    domains: ["environment"],
+    async available(): Promise<boolean> {
+      const allowed = dependencies.isMac && (await dependencies.policyEnabled());
+      diagnostic = allowed
+        ? null
+        : {
+            reason: "disabled_by_policy",
+            detail: "Microphone level sampling is disabled in the Sense policy.",
+            fixHint: "Run sense-mcp enable mic if a one-second volume class is wanted.",
+          };
+      return allowed;
+    },
+    async sample(signal): Promise<Observation[]> {
+      if (!(await dependencies.policyEnabled())) {
+        diagnostic = {
+          reason: "disabled_by_policy",
+          detail: "Microphone level sampling is disabled in the Sense policy.",
+          fixHint: "Run sense-mcp enable mic if a one-second volume class is wanted.",
+        };
+        return [];
+      }
 
-    const db = parseVolumeDetect(`${result.stdout}\n${result.stderr}`);
-    if (db === null) {
-      lastAudioDiagnostic = {
-        reason: "audio_level_parse_failed",
-        detail: "ffmpeg did not return a volume reading.",
-        fixHint: "Set SENSE_MIC_DEVICE_INDEX to a valid microphone input.",
-      };
-      return [];
-    }
-    lastAudioDiagnostic = null;
+      const deviceIndex =
+        dependencies.env.SENSE_MIC_DEVICE_INDEX ??
+        (await defaultAudioDeviceIndex(dependencies, signal));
+      if (!deviceIndex) {
+        diagnostic = {
+          reason: "audio_device_unavailable",
+          detail: "No AVFoundation audio input device was found.",
+          fixHint: "Check macOS input devices or configure a valid ffmpeg audio-device index.",
+        };
+        return [];
+      }
+      const result = await dependencies.runCommand(
+        "ffmpeg",
+        [
+          "-hide_banner",
+          "-f",
+          "avfoundation",
+          "-t",
+          String(SAMPLE_SECONDS),
+          "-i",
+          `:${deviceIndex}`,
+          "-af",
+          "volumedetect",
+          "-f",
+          "null",
+          "-",
+        ],
+        5000,
+        signal,
+      );
+      if (!result || result.exitCode !== 0 || result.timedOut) {
+        diagnostic = {
+          reason: result?.timedOut ? "audio_level_timeout" : "audio_capture_failed",
+          detail: "Microphone level capture failed without retaining audio.",
+          fixHint: "Grant Microphone permission to the app running Sense or configure a valid input.",
+        };
+        return [];
+      }
 
-    return [
-      {
-        sensor: "audio-level",
-        domain: "environment",
-        fields: {
-          noise_class: classifyNoise(db),
-          microphone_level_db: Math.round(db * 10) / 10,
-          microphone_level_sample_ms: SAMPLE_SECONDS * 1000,
+      const db = parseVolumeDetect(`${result.stdout}\n${result.stderr}`);
+      if (db === null) {
+        diagnostic = {
+          reason: "audio_level_parse_failed",
+          detail: "The local volume analyzer did not return a reading.",
+          fixHint: "Configure a valid microphone input.",
+        };
+        return [];
+      }
+      diagnostic = null;
+
+      return [
+        {
+          sensor: "audio-level",
+          domain: "environment",
+          fields: {
+            noise_class: classifyNoise(db),
+            microphone_level_db: Math.round(db * 10) / 10,
+            microphone_level_sample_ms: SAMPLE_SECONDS * 1000,
+          },
+          observedAt: Date.now(),
+          ttlMs: TTL_MS,
         },
-        observedAt: Date.now(),
-        ttlMs: TTL_MS,
-      },
-    ];
-  },
-  diagnose: () => lastAudioDiagnostic,
-};
+      ];
+    },
+    diagnose: () => diagnostic,
+  };
+}
+
+/** Opt-in microphone level only. No audio content is stored or returned. */
+export const audioLevelSensor = createAudioLevelSensor();

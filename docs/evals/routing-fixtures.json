@@ -5,8 +5,8 @@
     "intent": "visual_appearance_check",
     "minimum_tool": "take_camera_snapshot",
     "recommended_tools": ["take_camera_snapshot"],
-    "avoided_tools": ["take_screen_snapshot"],
-    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "avoided_tools": ["take_window_snapshot"],
+    "forbidden_recommended_tools": ["take_window_snapshot"],
     "requires_explicit_media": true,
     "context_plan": {
       "expected_value": "high",
@@ -21,26 +21,42 @@
     "intent": "visual_appearance_check",
     "minimum_tool": "take_camera_snapshot",
     "recommended_tools": ["take_camera_snapshot"],
-    "avoided_tools": ["take_screen_snapshot"],
-    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "avoided_tools": ["take_window_snapshot"],
+    "forbidden_recommended_tools": ["take_window_snapshot"],
     "requires_explicit_media": true
   },
   {
     "name": "screen debug",
     "prompt": "Use Sense screen if helpful: what is this error on my screen?",
     "intent": "screen_debug",
-    "minimum_tool": "take_screen_snapshot",
-    "recommended_tools": ["take_screen_snapshot"],
-    "avoided_tools": ["take_camera_snapshot"],
-    "forbidden_recommended_tools": ["take_camera_snapshot"],
+    "minimum_tool": "take_window_snapshot",
+    "recommended_tools": ["take_window_snapshot"],
+    "avoided_tools": ["take_camera_snapshot", "take_full_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_camera_snapshot", "take_full_screen_snapshot"],
     "requires_explicit_media": true
+  },
+  {
+    "name": "explicit full screen review",
+    "prompt": "Use Sense to review my entire screen right now.",
+    "intent": "screen_debug",
+    "minimum_tool": "take_full_screen_snapshot",
+    "recommended_tools": ["take_full_screen_snapshot"],
+    "avoided_tools": ["take_camera_snapshot", "take_window_snapshot"],
+    "forbidden_recommended_tools": ["take_camera_snapshot", "take_window_snapshot"],
+    "requires_explicit_media": true,
+    "context_plan": {
+      "expected_value": "high",
+      "budget_mode": "visual",
+      "include_frame": false,
+      "included_context": ["full_screen_snapshot"]
+    }
   },
   {
     "name": "current page readable",
     "prompt": "Use Sense screen if helpful: is this page readable?",
     "intent": "screen_debug",
-    "minimum_tool": "take_screen_snapshot",
-    "recommended_tools": ["take_screen_snapshot"],
+    "minimum_tool": "take_window_snapshot",
+    "recommended_tools": ["take_window_snapshot"],
     "avoided_tools": ["take_camera_snapshot"],
     "forbidden_recommended_tools": ["take_camera_snapshot"],
     "requires_explicit_media": true
@@ -51,8 +67,8 @@
     "intent": "time_pressure",
     "minimum_tool": "get_schedule_context",
     "recommended_tools": ["get_schedule_context", "get_user_state"],
-    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
-    "forbidden_recommended_tools": ["take_camera_snapshot", "take_screen_snapshot"],
+    "avoided_tools": ["take_camera_snapshot", "take_window_snapshot", "take_full_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_camera_snapshot", "take_window_snapshot", "take_full_screen_snapshot"],
     "requires_explicit_media": false,
     "context_plan": {
       "expected_value": "high",
@@ -66,8 +82,8 @@
     "intent": "time_pressure",
     "minimum_tool": "get_schedule_context",
     "recommended_tools": ["get_schedule_context", "get_user_state"],
-    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
-    "forbidden_recommended_tools": ["take_camera_snapshot", "take_screen_snapshot"],
+    "avoided_tools": ["take_camera_snapshot", "take_window_snapshot"],
+    "forbidden_recommended_tools": ["take_camera_snapshot", "take_window_snapshot"],
     "requires_explicit_media": false
   },
   {
@@ -77,7 +93,7 @@
     "minimum_tool": "none",
     "recommended_tools": [],
     "recommended_tools_exact": true,
-    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
+    "avoided_tools": ["take_camera_snapshot", "take_window_snapshot"],
     "requires_explicit_media": false,
     "context_plan": {
       "expected_value": "none",
@@ -92,8 +108,8 @@
     "minimum_tool": "none",
     "recommended_tools": [],
     "recommended_tools_exact": true,
-    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
-    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "avoided_tools": ["take_camera_snapshot", "take_window_snapshot"],
+    "forbidden_recommended_tools": ["take_window_snapshot"],
     "requires_explicit_media": false
   },
   {
@@ -103,8 +119,8 @@
     "minimum_tool": "none",
     "recommended_tools": [],
     "recommended_tools_exact": true,
-    "avoided_tools": ["take_camera_snapshot", "take_screen_snapshot"],
-    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "avoided_tools": ["take_camera_snapshot", "take_window_snapshot"],
+    "forbidden_recommended_tools": ["take_window_snapshot"],
     "requires_explicit_media": false
   },
   {
@@ -115,7 +131,7 @@
     "recommended_tools": [],
     "recommended_tools_exact": true,
     "forbidden_intents": ["time_pressure"],
-    "forbidden_recommended_tools": ["get_schedule_context", "take_camera_snapshot", "take_screen_snapshot"],
+    "forbidden_recommended_tools": ["get_schedule_context", "take_camera_snapshot", "take_window_snapshot"],
     "requires_explicit_media": false,
     "context_plan": {
       "expected_value": "none",
@@ -131,7 +147,7 @@
     "recommended_tools": [],
     "recommended_tools_exact": true,
     "forbidden_intents": ["focus_state"],
-    "forbidden_recommended_tools": ["get_context_frame", "take_camera_snapshot", "take_screen_snapshot"],
+    "forbidden_recommended_tools": ["get_context_frame", "take_camera_snapshot", "take_window_snapshot"],
     "requires_explicit_media": false,
     "context_plan": {
       "expected_value": "none",
@@ -155,8 +171,8 @@
     "intent": "visual_appearance_check",
     "minimum_tool": "take_camera_snapshot",
     "recommended_tools": ["take_camera_snapshot"],
-    "avoided_tools": ["take_screen_snapshot"],
-    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "avoided_tools": ["take_window_snapshot", "take_full_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_window_snapshot", "take_full_screen_snapshot"],
     "requires_explicit_media": true
   },
   {
@@ -166,8 +182,8 @@
     "minimum_tool": "none",
     "recommended_tools": [],
     "recommended_tools_exact": true,
-    "avoided_tools": ["take_screen_snapshot"],
-    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "avoided_tools": ["take_window_snapshot", "take_full_screen_snapshot"],
+    "forbidden_recommended_tools": ["take_window_snapshot", "take_full_screen_snapshot"],
     "requires_explicit_media": false
   },
   {
@@ -177,8 +193,8 @@
     "minimum_tool": "none",
     "recommended_tools": [],
     "recommended_tools_exact": true,
-    "avoided_tools": ["take_screen_snapshot"],
-    "forbidden_recommended_tools": ["take_screen_snapshot"],
+    "avoided_tools": ["take_window_snapshot"],
+    "forbidden_recommended_tools": ["take_window_snapshot"],
     "requires_explicit_media": false
   }
 ]

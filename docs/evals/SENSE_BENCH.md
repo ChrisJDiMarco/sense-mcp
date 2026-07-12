@@ -29,9 +29,9 @@ They check:
 - privacy-boundary behavior
 - explicit-media requirements
 
-Latest recorded router result:
+Current router result:
 
-- `15/15` adversarial fixtures
+- `16/16` adversarial fixtures
 - `51/51` prompt-pack routing expectations
 
 See `docs/evals/results/2026-06-15-router-benchmark.md`.

@@ -21,6 +21,7 @@ export const timeContextSensor: Sensor = {
   name: "time-context",
   intervalMs: 60_000,
   tier: 0,
+  domains: ["environment"],
   async sample(): Promise<Observation[]> {
     const now = new Date();
     const day = now.getDay();

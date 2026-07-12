@@ -1,5 +1,6 @@
-import { access, readFile } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import { iphoneContextPath, readIphoneContextObservation } from "../iphoneContext.js";
+import { readPrivateText } from "../privateFiles.js";
 import type { Domain, Observation, Sensor } from "../types.js";
 
 const TTL_MS = 60_000;
@@ -40,7 +41,7 @@ async function readBridgeFields(config: BridgeConfig): Promise<Record<string, Pr
   if (!file) return null;
 
   try {
-    const parsed = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+    const parsed = JSON.parse(await readPrivateText(file, 64 * 1024)) as Record<string, unknown>;
     const fields: Record<string, Primitive> = {};
     for (const [key, value] of Object.entries(parsed)) {
       if (config.allowedFields.has(key) && isPrimitive(value)) fields[key] = value;
@@ -57,6 +58,7 @@ function bridgeSensor(config: BridgeConfig): Sensor {
     intervalMs: 60_000,
     tier: 2,
     capability: config.capability,
+    domains: [config.domain],
     available: async () => {
       const file = process.env[config.envPath];
       if (!file) return false;
@@ -67,7 +69,8 @@ function bridgeSensor(config: BridgeConfig): Sensor {
         return false;
       }
     },
-    async sample(): Promise<Observation[]> {
+    async sample(signal): Promise<Observation[]> {
+      if (signal?.aborted) return [];
       const fields = await readBridgeFields(config);
       if (!fields) return [];
 
@@ -108,6 +111,7 @@ export const iphoneContextBridgeSensor: Sensor = {
   intervalMs: 60_000,
   tier: 2,
   capability: "iphone_context",
+  domains: ["user"],
   available: async () => {
     try {
       await access(iphoneContextPath());
@@ -116,5 +120,5 @@ export const iphoneContextBridgeSensor: Sensor = {
       return false;
     }
   },
-  sample: async () => readIphoneContextObservation(),
+  sample: async (signal) => signal?.aborted ? [] : readIphoneContextObservation(),
 };

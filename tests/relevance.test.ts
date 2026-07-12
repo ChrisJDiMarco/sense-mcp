@@ -15,6 +15,8 @@ describe("planRelevantContext", () => {
     expect(plan.context_plan.budget.mode).toBe("visual");
     expect(plan.context_plan.include_frame).toBe(false);
     expect(plan.context_plan.included_context).toEqual(["camera_snapshot"]);
+    expect(plan.context_satisfied).toBe(false);
+    expect(plan.follow_up_tools).toEqual(["take_camera_snapshot"]);
   });
 
   test("routes hair checks to camera snapshot with hair mode", () => {
@@ -26,12 +28,32 @@ describe("planRelevantContext", () => {
   test("routes screen/UI questions to screen snapshot", () => {
     const plan = planRelevantContext("what is this error on my screen?");
     expect(plan.intent).toBe("screen_debug");
-    expect(plan.minimum_tool).toBe("take_screen_snapshot");
-    expect(plan.recommended_tools).toContain("take_screen_snapshot");
+    expect(plan.minimum_tool).toBe("take_window_snapshot");
+    expect(plan.recommended_tools).toContain("take_window_snapshot");
+    expect(plan.recommended_tools).not.toContain("take_full_screen_snapshot");
     expect(plan.snapshot_mode).toBe("screen_debug");
     expect(plan.relevant_domains).toContain("screen");
+    expect(plan.guidance.join(" ")).toContain("window-id capture");
     expect(plan.context_plan.include_frame).toBe(false);
-    expect(plan.context_plan.included_context).toEqual(["screen_snapshot"]);
+    expect(plan.context_plan.included_context).toEqual(["window_snapshot"]);
+  });
+
+  test("routes only an explicit whole-screen request to full-screen capture", () => {
+    const plan = planRelevantContext("review my entire screen right now");
+
+    expect(plan.minimum_tool).toBe("take_full_screen_snapshot");
+    expect(plan.recommended_tools).toEqual(["take_full_screen_snapshot"]);
+    expect(plan.avoided_tools).toContain("take_window_snapshot");
+    expect(plan.context_plan.included_context).toEqual(["full_screen_snapshot"]);
+  });
+
+  test("does not claim the main-display tool can capture all displays", () => {
+    const plan = planRelevantContext("review all my displays right now");
+
+    expect(plan.minimum_tool).toBe("none");
+    expect(plan.recommended_tools).toEqual([]);
+    expect(plan.guidance.join(" ")).toContain("only the main display");
+    expect(plan.avoided_tools).toContain("take_full_screen_snapshot");
   });
 
   test("does not screenshot non-deictic writing that mentions screen as a topic", () => {
@@ -39,7 +61,12 @@ describe("planRelevantContext", () => {
     expect(plan.intent).toBe("writing_or_general_help");
     expect(plan.minimum_tool).toBe("none");
     expect(plan.recommended_tools).toEqual([]);
-    expect(plan.avoided_tools).toEqual(["take_camera_snapshot", "take_screen_snapshot"]);
+    expect(plan.avoided_tools).toEqual([
+      "take_camera_snapshot",
+      "take_window_snapshot",
+      "take_full_screen_snapshot",
+      "take_screen_snapshot",
+    ]);
   });
 
   test("routes urgency/time prompts to schedule and user state", () => {
@@ -75,8 +102,24 @@ describe("planRelevantContext", () => {
     expect(plan.intent).toBe("writing_or_general_help");
     expect(plan.minimum_tool).toBe("none");
     expect(plan.recommended_tools).toEqual([]);
-    expect(plan.avoided_tools).toEqual(["take_camera_snapshot", "take_screen_snapshot"]);
+    expect(plan.avoided_tools).toEqual([
+      "take_camera_snapshot",
+      "take_window_snapshot",
+      "take_full_screen_snapshot",
+      "take_screen_snapshot",
+    ]);
     expect(plan.guidance.join(" ")).toContain("Do not use camera");
+    expect(plan.context_satisfied).toBe(true);
+    expect(plan.follow_up_tools).toEqual([]);
+  });
+
+  test("marks a context-reading plan unsatisfied until the router embeds the frame", () => {
+    const plan = planRelevantContext("what am I working on right now?");
+
+    expect(plan.minimum_tool).toBe("get_context_frame");
+    expect(plan.context_plan.include_frame).toBe(true);
+    expect(plan.context_satisfied).toBe(false);
+    expect(plan.follow_up_tools).toEqual(["get_context_frame"]);
   });
 
   test("treats message-reading requests as a privacy boundary", () => {
@@ -84,6 +127,8 @@ describe("planRelevantContext", () => {
     expect(plan.intent).toBe("privacy_boundary");
     expect(plan.minimum_tool).toBe("none");
     expect(plan.recommended_tools).toEqual([]);
+    expect(plan.avoided_tools).toContain("take_window_snapshot");
+    expect(plan.avoided_tools).toContain("take_full_screen_snapshot");
     expect(plan.avoided_tools).toContain("take_screen_snapshot");
     expect(plan.fallbacks.join(" ")).toContain("privacy");
   });
@@ -93,6 +138,11 @@ describe("planRelevantContext", () => {
     expect(plan.intent).toBe("privacy_boundary");
     expect(plan.minimum_tool).toBe("none");
     expect(plan.recommended_tools).toEqual([]);
-    expect(plan.avoided_tools).toEqual(["take_camera_snapshot", "take_screen_snapshot"]);
+    expect(plan.avoided_tools).toEqual([
+      "take_camera_snapshot",
+      "take_window_snapshot",
+      "take_full_screen_snapshot",
+      "take_screen_snapshot",
+    ]);
   });
 });

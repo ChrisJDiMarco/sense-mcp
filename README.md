@@ -10,18 +10,18 @@ MCP gave agents tools. Memory gives them history. Sense gives them the current m
 
 [![CI](https://github.com/ChrisJDiMarco/sense-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ChrisJDiMarco/sense-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](./LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D18-339933.svg)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-339933.svg)](https://nodejs.org/)
 [![MCP](https://img.shields.io/badge/MCP-server-635bff.svg)](https://modelcontextprotocol.io/)
 [![macOS](https://img.shields.io/badge/platform-macOS--first-lightgrey.svg)](#requirements)
-[![Privacy](https://img.shields.io/badge/privacy-local--only-10b981.svg)](#privacy-contract)
+[![Privacy](https://img.shields.io/badge/privacy-local--first-10b981.svg)](#privacy-contract)
 
 </div>
 
 `sense-mcp` is a local MCP server that lets an AI client ask for the smallest
 useful slice of local context: what you are working on, whether you seem active,
 whether time pressure is high, what devices are connected, whether optional
-workspace state is relevant, and when explicitly requested, one camera or screen
-snapshot.
+workspace state is relevant, and when explicitly requested, one camera,
+app-window, or full-screen snapshot.
 
 It is a context broker, not a surveillance layer. The agent does not receive a
 constant feed. It asks Sense only when context would likely improve the answer,
@@ -51,14 +51,14 @@ Sense fills that gap with three rules:
 |---|---|
 | Ask first | Nothing is injected into every prompt. The client pulls context when it helps. |
 | Say less | Emit semantic states like `coding`, `active`, `moderate` time pressure, and `quiet`. |
-| Keep it local | Sensors run on the user's machine. Explicit media snapshots stay temporary. |
+| Collect locally | Sensors run on the user's machine. The MCP client may forward returned results to its model provider. |
 
 ## What Sense Can Help With
 
 | User asks | Sense gives the agent |
 |---|---|
 | "What am I doing right now?" | A compact situation card with activity, presence, device, workspace, and schedule signals. |
-| "Can you help me debug this screen?" | A recommendation to take one explicit screen snapshot, then inspect the returned image path. |
+| "Can you help me debug this app?" | A recommendation to capture one app window without activating it, then inspect the returned image path. |
 | "How do I look?" | A recommendation to take one explicit camera snapshot if camera snapshots are enabled. |
 | "Do I have time for this?" | Time pressure, meeting proximity, active work mode, and confidence/unknowns. |
 | "Pick up where we left off." | Current workspace name, branch, dirty count, and recent safe changes when workspace context is enabled. |
@@ -73,7 +73,7 @@ flowchart TD
   R --> P["context_plan: value, budget, minimum tool"]
   P -->|"no value"| N["Answer normally"]
   P -->|"useful"| F["Focused ContextFrame"]
-  P -->|"visual"| V["Explicit snapshot tool"]
+  P -->|"visual"| V["Local consent, then one snapshot"]
   V --> I["Temporary private image path"]
   F --> A["Answer"]
   I --> A
@@ -93,6 +93,10 @@ Sense exposes both raw MCP tools and a higher-level router:
 3. If a visual answer is requested, the client can call exactly one explicit
    snapshot tool and inspect the returned `snapshot_path`.
 
+Each MCP client gets a thin stdio adapter. All adapters for the current user
+share one broker, scheduler, and in-memory state store through a private Unix
+socket. Adapters reconnect and elect a replacement if the broker exits.
+
 ## Privacy Contract
 
 Sense is built around one constraint:
@@ -101,11 +105,11 @@ Sense is built around one constraint:
 
 | Principle | Implementation |
 |---|---|
-| Local only | Sensors run locally. No background network calls from sensors. |
+| Local acquisition | Sensors run locally. Returned MCP results may go to the client's model provider. |
 | Pull based | Context is requested by the AI client only when useful. |
 | Ephemeral | Context frames describe now and expire quickly. |
 | Semantic by default | The server emits classified states, not raw private content. |
-| Explicit media | Camera and screen snapshots are opt-in tools, never background streams. |
+| Exact media consent | Every camera, window, or full-screen capture needs local allow-once approval. |
 | Temporary artifacts | Snapshot files are stored in a private temp directory and cleaned up later. |
 | Auditability | A local privacy ledger records tool-call metadata without storing frames or pixels. |
 
@@ -118,15 +122,14 @@ Read the full privacy model in [docs/PRIVACY.md](./docs/PRIVACY.md).
 Sense is client-agnostic MCP. The built-in sensors are macOS-first today, and
 unavailable sensors degrade gracefully with diagnostics instead of hard failure.
 
-Current reliability checks:
+Release checks:
 
 | Check | Current result |
 |---|---:|
-| Unit tests | 86 passing |
-| Adversarial routing fixtures | 15/15 |
-| Prompt-pack routing expectations | 51/51 |
-| Production dependency audit | 0 vulnerabilities |
-| CI matrix | Node 20 and Node 22 |
+| Full validation | `npm run check` |
+| Package contents and size | `npm run check:package` |
+| iOS companion | `npm run ios:build` |
+| CI matrix | Node 22 and Node 24 |
 
 See [CHANGELOG.md](./CHANGELOG.md), [ROADMAP.md](./ROADMAP.md), and
 [docs/KNOWN_LIMITATIONS.md](./docs/KNOWN_LIMITATIONS.md).
@@ -169,8 +172,9 @@ Open local settings:
 node dist/index.js settings --open
 ```
 
-The settings panel lets users review permissions, toggle camera/screen/mic and
-workspace context, inspect health checks, and view the local privacy ledger.
+The settings panel lets users review central policy, toggle supported
+capabilities, inspect broker and sensor health, and view the local privacy
+ledger. Policy changes hot-reload in the shared broker.
 
 Run the full local validation suite with:
 
@@ -186,9 +190,9 @@ If Sense is later installed globally, replace `node dist/index.js` with
 | Profile | Enables | Best for |
 |---|---|---|
 | `safe` | Semantic context only | Trying Sense with no explicit media. |
-| `developer` | Screen snapshots | Coding, UI review, and debug help. |
-| `visual` | Camera and screen snapshots | Appearance, desk, room, and screen questions. |
-| `full` | Camera, screen, and mic level | Full local context with explicit opt-ins. |
+| `developer` | App-window snapshots | Coding, UI review, and debug help. |
+| `visual` | Camera and app-window snapshots | Appearance, desk, room, and app questions. |
+| `full` | Camera, app-window, and mic level | Broader semantic context with explicit media policy. |
 
 Raw window titles are never enabled by a profile. Use `--raw-titles` only when
 you intentionally want redacted title exposure.
@@ -197,9 +201,10 @@ you intentionally want redacted title exposure.
 
 | Requirement | Why |
 |---|---|
-| Node.js 18+ | Runs the MCP server. |
+| Node.js 22+ | Runs the MCP server. |
 | macOS | Current OS sensors use macOS APIs. |
-| `ffmpeg` | Camera availability, camera snapshots, and mic-level sampling. |
+| `ffmpeg` | Camera snapshots and mic-level sampling. |
+| `icalBuddy` (optional) | Headless local Calendar timing when Calendar policy is enabled. |
 | macOS permissions | Camera, Screen Recording, Microphone, Accessibility/Automation as needed. |
 
 Install `ffmpeg` on macOS:
@@ -227,7 +232,7 @@ args = ["/absolute/path/to/sense-mcp/dist/index.js"]
 startup_timeout_sec = 20
 ```
 
-Optional opt-ins:
+Environment migration fallbacks:
 
 ```toml
 [mcp_servers.sense.env]
@@ -235,6 +240,17 @@ SENSE_CAMERA_SNAPSHOT = "1"
 SENSE_SCREEN_SNAPSHOT = "1"
 SENSE_WORKSPACE_ROOTS = "/absolute/path/to/workspace"
 ```
+
+For ongoing changes, prefer central CLI policy:
+
+```bash
+sense-mcp enable camera
+sense-mcp enable screen
+sense-mcp disable full-screen
+```
+
+The private policy file is authoritative per key. Environment variables apply
+only when that key is absent from the policy file.
 
 See [examples/codex_config.toml](./examples/codex_config.toml) and
 [docs/clients/codex.md](./docs/clients/codex.md).
@@ -251,8 +267,13 @@ node /absolute/path/to/sense-mcp/dist/index.js
 For coding use, start with workspace and screen context:
 
 ```bash
-SENSE_SCREEN_SNAPSHOT=1
 SENSE_WORKSPACE_ROOTS=/absolute/path/to/workspace
+```
+
+Then enable app-window capture in central policy:
+
+```bash
+sense-mcp enable screen
 ```
 
 See [docs/clients/claude-code.md](./docs/clients/claude-code.md).
@@ -297,20 +318,30 @@ sense-mcp settings --open
 
 The old `panel --open` command still works as an alias.
 
+The panel opens through a private `0600` launcher file. Its bootstrap secret is
+posted in the request body, never placed in a process argument, URL, browser
+history, terminal output, or clipboard. The server consumes it once and issues
+a distinct HttpOnly, SameSite session cookie; the base page, status endpoint,
+and every settings API fail closed without that session. The iPhone companion
+does not post plaintext check-ins to the settings server; use the separately
+enabled encrypted LAN bridge.
+
 The panel shows:
 
-- capability state for camera, screen, mic, raw titles, and workspace context
+- capability state for Calendar, location, camera, window, full-screen, mic,
+  raw titles, and workspace context
 - trust model and health checks
 - recent explicit snapshot metadata, never embedded pixels
 - recent explicit tool activity
 - local privacy ledger entries
-- known Sense environment toggles
+- central policy source and migration fallbacks
 
 Security properties:
 
 - binds to `127.0.0.1`
 - rejects non-local Host headers
-- requires an ephemeral token for permission changes
+- exchanges a one-use private launcher bootstrap for an HttpOnly session before
+  serving HTML, status, or any API
 
 ## iOS Companion
 
@@ -322,46 +353,66 @@ use local context. The iPhone app adds an intentional self-report channel:
 - feeling, energy, stress, and focus sliders
 - optional iPhone device state, motion/steps, ambient noise class, and Health summaries
 - expiring semantic context payloads
-- local bridge sync to `http://127.0.0.1:3777/api/iphone-context` for simulator/dev
-- in-app GitHub, install command, MCP config, bridge URL, and connection test
+- in-app GitHub, install command, MCP config, pairing, and connection test
 
 The iPhone signals are opt-in and summarized before sync. Sense does not retain
 raw audio; the companion sends noise class and dBFS meter values only. HealthKit
 data is reduced to broad fields such as steps, active energy, heart rate, and
 sleep minutes.
 
-The desktop settings panel accepts iPhone companion payloads at
-`/api/iphone-context` and stores the latest expiring payload in
+The companion keeps at most 12 unexpired local check-ins in a 256 KiB-capped,
+atomic Application Support file with complete file protection. It migrates and
+removes legacy `UserDefaults` history, prunes exact-expiry records from memory
+and disk, and starts unpaired with no localhost fallback.
+
+The Mac stores the latest accepted expiring payload in
 `~/.sense-mcp/iphone-context.json` by default. Override that path with
-`SENSE_IPHONE_CONTEXT_PATH`. Bridge writes are localhost-only and require the
-companion's `X-Sense-Bridge: sense-ios` header to avoid blind browser posts.
-Physical iPhone sync is intentionally not exposed as a LAN listener by default.
-To try a physical iPhone on a trusted network, start the bridge-only LAN mode:
+`SENSE_IPHONE_CONTEXT_PATH`. Physical iPhone sync is not exposed on LAN by
+default. Start the bridge-only listener explicitly on a trusted network:
 
 ```bash
 sense-mcp settings --lan --open
 ```
 
-Paste the printed LAN bridge URL and token into the iPhone app's Setup tab. LAN
-mode exposes only `/api/iphone-context`, requires `Authorization: Bearer <token>`
-and `X-Sense-Bridge: sense-ios`, and does not expose panel settings APIs.
+Sense copies a secret-bearing pairing deep link to the clipboard and does not
+print it. Clipboard managers and same-user processes are therefore inside the
+pairing threat model; import the link promptly and clear it after use. The app
+stores the secret in Keychain and accepts only private, link-local, loopback,
+mDNS, or shared carrier-grade NAT (`100.64.0.0/10`) targets. Every request,
+including loopback, requires that secret. Accepted request payloads and
+successful response payloads use AES-256-GCM with method/path/timestamp/nonce
+binding, replay protection, clock-skew checks, and body limits. Successful
+encrypted responses are bound to their request nonce; rejected requests return
+generic plaintext errors. There is no Bearer-token mode, and panel settings
+APIs are not exposed on LAN.
 
 ## MCP Tools
 
 | Tool | Purpose | Captures media? |
 |---|---|---:|
 | `get_relevant_context` | Classifies the request and returns a context plan with value, budget, recommended tools, avoided tools, and privacy notes. | No |
-| `get_context_frame` | Full ContextFrame plus privacy and assistive posture. | No |
+| `get_context_frame` | Bounded projected ContextFrame plus privacy, health, and assistive posture. | No |
 | `get_screen_context` | Current activity and privacy-safe work context. | No |
 | `get_user_state` | Presence, idle state, and input cadence. | No |
 | `get_environment_context` | Time, power, devices, media, light/noise/location when available. | No |
 | `get_schedule_context` | Meeting state and time pressure. | No |
 | `get_domains` | Selected ContextFrame domains. | No |
-| `take_camera_snapshot` | One explicit webcam snapshot for a current visual request. | Yes, opt-in |
-| `take_screen_snapshot` | One explicit screenshot for a current visual/debug request. | Yes, opt-in |
+| `take_camera_snapshot` | One camera frame after exact local allow-once consent. | Yes |
+| `take_window_snapshot` | One app window without activating it, after exact local consent. | Yes |
+| `take_full_screen_snapshot` | Main-display capture with explicit full-screen confirmation and local consent. | Yes |
+| `take_screen_snapshot` | Deprecated window-only alias for `take_window_snapshot`; never full-screen. | Yes |
 
 Every ContextFrame includes a `privacy` block with per-capability status:
-`granted`, `denied`, or `unavailable`.
+`granted`, `denied`, or `unavailable`. `capability_states` separately reports
+`disabled`, `permission_denied`, `no_signal`, `degraded`, `stale`, or `healthy`.
+
+Context tools accept `compact`, `brief`, `focused`, `debug`, and `diff`
+projections plus `cached`, `if_stale`, or `force` refresh. The reported
+`max_bytes` is enforced for the complete structured response at three bytes per
+estimated token. `estimated_tokens` is conservative because model tokenizers
+differ. `context_satisfied: true` means the client should not call another Sense
+context getter for the same request. Every stored field expires on its own TTL;
+refresh is limited to sensors declared for the requested domains.
 
 ## Sensor Matrix
 
@@ -373,28 +424,47 @@ Every ContextFrame includes a `privacy` block with per-capability status:
 | `battery` | Battery percent, power source, low-power flag | macOS `pmset` |
 | `devices` | External display count, broad Bluetooth classes | macOS `system_profiler` |
 | `workspace` | Configured workspace name, git branch, dirty count | local `git` |
-| `calendar` | Meeting state, next-event minutes, pressure class | macOS Calendar via `osascript` |
+| `calendar` | Meeting state, next-event minutes, pressure class | optional headless `icalBuddy` |
 | `location` | Coarse location class from configured Wi-Fi names | macOS `networksetup` |
 | `media` | Media app and playing/paused state | Spotify/Music via `osascript` |
 | `ambient-light` | Lighting class when an ALS sensor exists | macOS `ioreg` |
 | `audio-level` | Opt-in noise class and dB level, never audio content | `ffmpeg` AVFoundation |
 | `focus-mode` | Env/Shortcuts bridge for Focus/DND mode | env or macOS Shortcuts |
-| `camera` | Camera availability and device count only | `ffmpeg` AVFoundation |
+| `camera` | On-demand camera capture only when policy and consent allow it | `ffmpeg` AVFoundation |
 | `health-bridge` | Optional local health/wearable semantic JSON | local JSON file |
 | `weather-bridge` | Optional local weather/daylight semantic JSON | local JSON file |
 | `iphone-context-bridge` | Optional expiring self-report context from the iOS companion | local JSON file |
 
-Calendar note: when an AI client has a direct Google Calendar or calendar
-connector, use that connector for account schedule data. Sense's Calendar sensor
-is a local fallback and reports diagnostics when macOS Calendar automation is
-slow or unavailable.
+Calendar is off by default. When enabled, Sense invokes optional headless
+`icalBuddy`; it never scripts or launches Calendar.app. Prefer a direct calendar
+connector for account-backed schedule data.
 
-## Opt-Ins
+## Policy and migration variables
+
+Use central policy for sensitive capabilities:
+
+```bash
+sense-mcp enable calendar
+sense-mcp enable location
+sense-mcp enable camera
+sense-mcp enable screen
+sense-mcp enable full-screen
+sense-mcp enable mic
+sense-mcp enable raw-titles
+sense-mcp disable full-screen
+```
+
+All listed sensitive capabilities default off. Existing environment variables
+remain migration fallbacks when the central policy file has no value for that
+key.
 
 | Env var | Effect |
 |---|---|
 | `SENSE_CAMERA_SNAPSHOT=1` | Enables explicit `take_camera_snapshot`. |
-| `SENSE_SCREEN_SNAPSHOT=1` | Enables explicit `take_screen_snapshot`. |
+| `SENSE_SCREEN_SNAPSHOT=1` | Enables app-window capture. |
+| `SENSE_FULL_SCREEN_SNAPSHOT=1` | Enables the separate full-screen policy gate. |
+| `SENSE_CALENDAR=1` | Enables optional headless `icalBuddy` schedule probes. |
+| `SENSE_LOCATION=1` | Enables coarse local location classification. |
 | `SENSE_SNAPSHOT_DIR=/path` | Private temp directory for explicit snapshots. |
 | `SENSE_MIC_LEVEL=1` | Enables one-second mic level sampling for `noise_class`. |
 | `SENSE_MIC_DEVICE_INDEX=2` | Selects the AVFoundation audio device index. |
@@ -408,18 +478,25 @@ slow or unavailable.
 
 ## Explicit Snapshot Rules
 
-`take_camera_snapshot` and `take_screen_snapshot` are intentionally separate
-from ordinary context calls.
+Camera, app-window, and full-screen tools are separate from ordinary context
+calls.
 
-They follow five rules:
+They follow six rules:
 
-1. Disabled unless the user opts in.
+1. Disabled unless central policy enables the exact scope.
 2. Require a current reason argument.
-3. Used only for visual requests in the active conversation.
-4. Return MCP image content and a private temporary `snapshot_path`.
-5. Never used for ordinary writing, coding, planning, or background context.
+3. Show a local allow-once prompt immediately before capture.
+4. Consume one signed receipt bound to kind, scope, target, normalized reason,
+   and expiry.
+5. Return MCP image content and a private temporary `snapshot_path`.
+6. Never run for ordinary writing, coding, planning, or background context.
 
-Old snapshot files in the temp directory are cleaned up on later snapshot calls.
+Window capture is the default screen action and does not activate the target
+app. `take_full_screen_snapshot` is separate and requires
+`confirm_full_screen: true`. `take_screen_snapshot` is a deprecated window-only
+alias.
+
+Snapshot files become eligible for bounded, opportunistic cleanup after two hours and may remain longer while Sense is idle.
 
 ## CLI
 
@@ -429,32 +506,40 @@ node dist/index.js init --write --profile visual --workspace /absolute/path/to/w
 node dist/index.js status
 node dist/index.js doctor
 node dist/index.js ledger
+node dist/index.js consent list
 node dist/index.js settings --open
 node dist/index.js settings --lan --open
 node dist/index.js enable camera
 node dist/index.js enable screen
+node dist/index.js enable full-screen
+node dist/index.js enable calendar
 node dist/index.js enable mic
 node dist/index.js enable workspace /absolute/path/to/workspace
 node dist/index.js disable mic
 ```
 
-`doctor` gives actionable setup checks:
+`doctor` enforces Node 22+, checks `ffmpeg` for enabled camera or mic features,
+checks `icalBuddy` and live Calendar diagnostics when Calendar context is
+enabled, and discovers an authenticated settings panel on its actual port from
+a private runtime receipt. It gives actionable setup checks:
 
 ```text
 PASS Node.js: v22.0.0
 PASS ffmpeg: available
-WARN Camera snapshot: disabled
-  Fix: Run sense-mcp settings --open and enable Camera Snapshot.
-WARN Focus mode sensor: No SENSE_FOCUS_MODE env value and Shortcut "Sense Current Focus" did not return a mode.
-  Fix: Set SENSE_FOCUS_MODE=deep_work or create a macOS Shortcut named Sense Current Focus that returns text.
+PASS Central policy: loaded from /Users/me/.sense-mcp/policy.json
+PASS Capture consent: local allow-once confirmation required; 0 active short-lived receipt(s)
+PASS Shared broker: reachable through private per-user IPC
+WARN Focus mode sensor: No focus-mode bridge is configured.
+  Fix: Set SENSE_FOCUS_MODE=deep_work to provide a manual focus mode.
 ```
 
 ## ContextFrame Spec
 
 Sense emits the open `context-frame/0.2` envelope. A frame includes privacy
 capabilities, quality/staleness metadata, a compact situation summary, and
-semantic domains such as screen, user, environment, schedule, devices, and
-workspace.
+four semantic domains: screen, user, environment, and schedule. Device and
+workspace readings are nested fields within those domains, not additional
+protocol domains.
 
 Small excerpt:
 
@@ -466,6 +551,10 @@ Small excerpt:
     "capabilities": {
       "screen_activity": "granted",
       "camera_snapshot": "denied"
+    },
+    "capability_states": {
+      "screen_activity": "healthy",
+      "camera_snapshot": "disabled"
     }
   },
   "situation": {
@@ -506,10 +595,8 @@ npm run eval:routing
 npm run eval:prompt-pack
 ```
 
-Current recorded router score:
-
-- adversarial routing fixtures: `15/15`
-- prompt-pack routing expectations: `51/51`
+The eval commands print the current fixture totals. Recorded historical results
+live under `docs/evals/results/`.
 
 See [docs/evals/results/2026-06-15-router-benchmark.md](./docs/evals/results/2026-06-15-router-benchmark.md).
 
@@ -523,7 +610,8 @@ import type { Sensor, Observation } from "../types.js";
 export const mySensor: Sensor = {
   name: "battery",
   intervalMs: 30_000,
-  async sample(): Promise<Observation[]> {
+  domains: ["environment"],
+  async sample(signal?: AbortSignal): Promise<Observation[]> {
     return [{
       sensor: "battery",
       domain: "environment",
@@ -550,6 +638,9 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 | Doc | Use it for |
 |---|---|
+| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Broker, scheduler, policy, and MCP boundaries |
+| [docs/PRIVACY.md](./docs/PRIVACY.md) | Collection, consent, storage, and model-egress contract |
+| [docs/KNOWN_LIMITATIONS.md](./docs/KNOWN_LIMITATIONS.md) | Platform, dependency, media, and client limits |
 | [docs/clients/codex.md](./docs/clients/codex.md) | Codex setup and guidance |
 | [docs/clients/claude-desktop.md](./docs/clients/claude-desktop.md) | Claude Desktop setup |
 | [docs/clients/claude-code.md](./docs/clients/claude-code.md) | Claude Code setup notes |

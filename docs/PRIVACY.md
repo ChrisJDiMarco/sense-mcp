@@ -1,205 +1,155 @@
-# Privacy Model
+# Privacy model
 
-`sense-mcp` is designed to give an AI client situational awareness without
-turning the user's machine into a surveillance feed.
+Sense collects context on the Mac and returns bounded results through MCP. Local
+collection does not mean model-local processing. The configured MCP client may
+send tool results, including images, to its model provider. Sense cannot control
+that provider's retention, training, or logging policy.
 
-The core promise:
+## Defaults
 
-1. Local only.
-2. Pull based.
-3. Ephemeral.
-4. Semantic by default.
-5. Explicit opt-in for sensitive capabilities.
+Sense keeps ordinary context semantic and short-lived. Raw content and
+sensitive probes are off unless policy enables them.
 
-## What Sense Sends to the AI
+The private per-user policy file is `~/.sense-mcp/policy.json` by default. Its
+values are authoritative. Existing `SENSE_*` environment variables remain
+per-key migration fallbacks when the file has no value. A missing value defaults
+to off for:
 
-The normal tool output is a ContextFrame: a small JSON object with semantic
-fields like:
-
-- `activity_class: "coding"`
-- `presence: "active"`
-- `time_pressure: "moderate"`
-- `noise_class: "quiet"`
-- `power_source: "ac_power"`
-
-These fields are intended to help the AI choose the right level of help. They
-are not a transcript, recording, or screenshot.
-
-Each ContextFrame can also include `quality` metadata: which sensor produced a
-field, whether it was observed/classified/derived, how stale it is, and whether
-screen activity looks stable or recently changed. This helps clients avoid
-overclaiming inferred context.
-
-Frames may also include a compact `situation` card. This is a lossy summary of
-the same semantic frame: summary, evidence, unknowns, risks, recommendations,
-and recent safe changes. It is designed to reduce token use, not expose more
-private data.
-
-## What Sense Does Not Send by Default
-
-By default, Sense does not send:
-
-- camera images
-- screenshots
-- audio content
-- keystrokes
-- message contents
-- browser page text
-- file contents
-- Wi-Fi SSIDs
-- calendar event titles
+- Calendar
+- coarse location
+- microphone level
+- camera snapshots
+- app-window snapshots
+- full-screen snapshots
 - raw window titles
-- track, artist, podcast, or episode names
 
-## Explicit Snapshot Tools
+Use `sense-mcp enable <capability>` and `sense-mcp disable <capability>` to
+change central policy. The broker reloads policy changes without requiring each
+MCP adapter to restart. An invalid or symlinked policy file fails closed.
 
-`take_camera_snapshot` and `take_screen_snapshot` are separate MCP tools.
+## Semantic context
 
-They are disabled unless the user opts in with:
+Normal ContextFrame fields are small states such as `activity_class: "coding"`,
+`presence: "active"`, and `power_source: "ac_power"`. Frames do not contain
+camera pixels, screenshots, audio content, keystrokes, messages, page text,
+file contents, Wi-Fi SSIDs, event titles, media titles, or raw window titles by
+default.
+
+Every observation has a TTL. The broker stores fields in memory by sensor and
+domain, and expires each field independently. A fresh partial update cannot
+extend an older field. Context tools can use cached state, refresh stale
+requested domains, or force a domain refresh.
+
+## Calendar
+
+Calendar is off by default. When enabled, Sense uses the optional headless
+`icalBuddy` command. It does not script, activate, or launch Calendar.app.
+The query requests date/time metadata only; event titles are neither requested
+nor emitted.
+
+Use a direct calendar connector when account-backed schedule data is required.
+Sense's local Calendar signal is a coarse timing fallback.
+
+## Media capture
+
+Media is never a broker background sensor.
+
+| Tool | Scope |
+|---|---|
+| `take_camera_snapshot` | One camera frame. |
+| `take_window_snapshot` | One selected or safely resolved app window without activating it. |
+| `take_full_screen_snapshot` | The main display; requires `confirm_full_screen: true`. |
+| `take_screen_snapshot` | Deprecated compatibility alias for `take_window_snapshot`; it never captures the full screen. |
+
+Policy enablement is necessary but not sufficient. Immediately before every
+camera, window, or full-screen capture, Sense shows a local allow-once prompt.
+Approval creates a signed, short-lived, single-use receipt bound to the media
+kind, scope, target, normalized reason, and expiry. The exact receipt must be
+consumed before acquisition. A mismatch, denial, expiry, replay, storage error,
+or unavailable prompt stops the capture. Receipt lifetime is clamped to 1 to
+120 seconds.
+
+Snapshot PNGs are written to a private per-user temp directory with mode `0600`.
+The directory is mode `0700`. Paths are unpredictable, bounded to 25 MiB,
+validated as PNGs, and become eligible for bounded, opportunistic cleanup after two hours; they may remain longer while Sense is idle.
+Sense rejects symlinked storage paths.
+
+## Output budgets
+
+Context projections are `compact`, `brief`, `focused`, `debug`, and `diff`.
+The requested `max_tokens` is converted to an enforced complete-response byte
+ceiling at three bytes per estimated token. Sense reports the byte ceiling,
+serialized bytes, conservative token estimate, and whether it selected a
+smaller projection. Exact token counts remain model-specific.
+
+Default estimates are 120 tokens for compact, 180 for brief, 280 for focused,
+1,200 for debug, and 140 for diff. Context inputs accept 96 to 4,096; router
+inputs accept 160 to 4,096 and default to 480.
+
+## Local storage
+
+Policy, consent, ledger, snapshot, broker, and iPhone context files use bounded
+reads, symlink rejection, private modes, and atomic same-directory replacement.
+Lock recovery checks file identity and live owner PIDs before removing stale
+locks.
+
+The access ledger defaults to `~/.sense-mcp/access-ledger.jsonl`. It keeps at
+most 200 metadata entries. Caller-controlled reasons and errors are never stored
+as plaintext; entries use fixed summaries/classes and SHA-256 hashes for local
+correlation. Reads migrate legacy plaintext rows under the ledger lock. The
+ledger never stores ContextFrames, pixels, audio, raw titles, messages, or file
+contents. Set `SENSE_LEDGER_DISABLED=1` to disable it.
+
+Consent receipts live under `~/.sense-mcp/consent`. Use:
 
 ```bash
-SENSE_CAMERA_SNAPSHOT=1
-SENSE_SCREEN_SNAPSHOT=1
+sense-mcp consent list
+sense-mcp consent revoke <receipt-id>
+sense-mcp consent revoke all
 ```
 
-Even when enabled, they should only be called when the current user request is
-visual, such as:
+## Settings panel
 
-- "how does my hair look?"
-- "is my lighting okay?"
-- "what is this error on my screen?"
-- "review this UI"
+`sense-mcp settings --open` binds to `127.0.0.1` and rejects non-local Host
+headers. It opens a private `0600` launcher file whose secret is posted once in
+the request body, never placed in a process argument, URL, history, terminal
+output, or clipboard. The server invalidates that bootstrap and issues a
+distinct HttpOnly, SameSite session cookie before serving HTML, status, or any
+settings API. The panel reports central policy, capability state, broker
+health, capture-consent requirement state, recent snapshot metadata, and ledger metadata. It does
+not embed snapshot pixels. The panel exposes no plaintext fixed-header iPhone
+check-in endpoint; companion traffic uses the separate AEAD bridge.
 
-They should not be called for ordinary writing, coding, planning, or background
-context.
+## iPhone companion
 
-## Temporary Snapshot Files
+The iPhone companion stores its pairing secret in Keychain. It stores at most
+12 unexpired local check-ins in an atomic 256 KiB-capped Application Support
+file with complete file protection; legacy `UserDefaults` history migrates once
+and is removed only after protected persistence succeeds. Accepted LAN request
+payloads and successful response payloads use AES-256-GCM with
+method/path/timestamp/nonce binding. The
+bridge rejects replayed nonces, excessive clock skew, invalid content lengths,
+oversized bodies, and unencrypted requests. The decrypted check-in payload is
+capped at 16 KiB and
+the encrypted HTTP body at 32 KiB. It exposes only the check-in and
+connection-check paths, not panel settings. Each successful response is
+authenticated against the nonce of its request; rejected requests use generic
+plaintext errors.
 
-Some MCP clients do not forward image blocks to the model. To make explicit
-visual requests work in those clients, Sense also writes a private temporary PNG
-and returns `snapshot_path`.
+Pairing uses a secret-bearing deep link copied through `pbcopy`; Sense does not
+print it. Clipboard managers and same-user processes are therefore inside the
+pairing threat model. The app accepts only private, link-local, loopback, mDNS,
+or shared carrier-grade NAT (`100.64.0.0/10`) targets, but every target still
+requires a valid pairing secret and AEAD. There is no Bearer-token or
+plaintext-loopback mode.
 
-Snapshot files are:
+## Client responsibility
 
-- created in a private temp directory
-- written with private file permissions
-- cleaned up on later snapshot calls
-- not part of the ContextFrame
-- not written to project directories unless the user explicitly asks for that
+Clients should request the smallest useful projection, stop when
+`context_satisfied` is true, inspect image content before making visual claims,
+and treat classified or derived fields as hints. They should never use capture
+tools for ordinary writing, coding, planning, or personalization.
 
-## Settings Panel
-
-`sense-mcp settings --open` starts a local settings panel. The older
-`sense-mcp panel --open` command remains as an alias.
-
-Security properties:
-
-- binds to `127.0.0.1`
-- rejects non-local Host headers
-- uses an ephemeral per-process token for permission changes
-- edits only allowlisted Sense environment variables
-- shows health and recent explicit snapshot metadata
-- shows a metadata-only privacy ledger for recent Sense tool calls
-- shows a restart notice because MCP clients usually read env at startup
-
-## iOS Companion Bridge
-
-The iOS companion sends expiring semantic self-reports to the Mac panel bridge
-at `/api/iphone-context`. The bridge stores only the latest sanitized payload in
-`~/.sense-mcp/iphone-context.json` unless `SENSE_IPHONE_CONTEXT_PATH` overrides
-that path.
-
-Bridge payloads are:
-
-- localhost-only by default
-- reachable from a trusted network only when `sense-mcp settings --lan --open`
-  starts the separate bridge-only listener
-- capped in size
-- sanitized and expiration-limited
-- accepted only with `X-Sense-Bridge: sense-ios`
-- accepted over LAN only with `Authorization: Bearer <token>`
-- reduced to semantic observations before entering ContextFrames
-
-The LAN listener exposes only `/api/iphone-context`, not panel settings,
-permission writes, status, or ledger routes. The header blocks blind browser
-posts to localhost. The bearer token protects private-alpha LAN use; it is not
-meant to authenticate against another local process running as the same user.
-
-## Privacy Ledger
-
-Sense records a small local access ledger by default in the OS temp directory
-(`SENSE_LEDGER_PATH` can override it). The ledger is metadata only. It helps the
-user answer: what did Sense access, when, why, and did it capture media?
-
-Ledger entries can include:
-
-- tool name
-- status
-- reason, redacted and truncated
-- context domains used
-- expected context value and token budget
-- connector hints such as `calendar_connector`
-- local artifact paths for explicit snapshots
-
-Ledger entries must not include:
-
-- ContextFrame payloads
-- screenshot or camera pixels
-- audio samples or transcripts
-- raw window titles
-- message contents
-- file contents
-
-Set `SENSE_LEDGER_DISABLED=1` to disable ledger writes.
-
-## Doctor Command
-
-`sense-mcp doctor` performs local setup checks for Node, macOS support, ffmpeg,
-Codex config, opt-in capabilities, workspace roots, panel reachability, and live
-sensor diagnostics. It can explain cases such as mic disabled by env, Focus mode
-bridge missing, Calendar query timeout, or ambient light not exposed by macOS. It
-does not inspect private content.
-
-## Capability Diagnostics
-
-ContextFrames may include `privacy.capability_details` for capabilities that are
-denied or unavailable. These diagnostics explain setup state; they do not expose
-raw private data.
-
-Examples:
-
-- `microphone_level`: `disabled_by_env`
-- `focus_mode`: `missing_focus_bridge`
-- `calendar`: `calendar_query_timeout`
-- `ambient_light`: `ambient_light_not_exposed`
-
-## Optional Capabilities
-
-| Capability | Default | Data class |
-|---|---:|---|
-| Camera snapshot | Off | explicit image snapshot |
-| Screen snapshot | Off | explicit screenshot |
-| Mic level | Off | one-second volume level, no audio content |
-| Raw window titles | Off | redacted active-window title |
-| Workspace roots | Off unless configured | git branch and dirty count |
-
-## Guidance for MCP Clients
-
-Clients should:
-
-- call `get_relevant_context` before deciding whether media is needed
-- honor `context_plan.expected_value`, `context_plan.plan_only`, and the token budget
-- call the narrowest tool that answers the request
-- honor `minimum_tool`, `avoided_tools`, `fallbacks`, and `privacy_notes`
-- use `privacy.capability_details` to explain missing context
-- inspect `snapshot_path` before answering visual questions
-- state uncertainty for classified fields
-- avoid proactive camera or screen capture
-- never treat inferred context as ground truth
-
-## Known Tradeoffs
-
-Sense is a local helper, not a sandbox. A compromised local MCP client can misuse
-any tool the user grants it. The privacy model depends on the client respecting
-tool descriptions and the user keeping sensitive capabilities disabled unless
-they are needed.
+Sense does not defend against an administrator, malware, or another compromised
+process running as the same OS user. Local consent limits accidental and remote
+tool misuse; it is not an operating-system sandbox.

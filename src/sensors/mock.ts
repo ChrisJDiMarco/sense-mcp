@@ -9,6 +9,7 @@ export const mockSensor: Sensor = {
   intervalMs: 5_000,
   tier: 1,
   capability: "screen_activity",
+  domains: ["screen", "user"],
   available: async () => process.env.SENSE_MOCK === "1",
   async sample(): Promise<Observation[]> {
     const now = Date.now();

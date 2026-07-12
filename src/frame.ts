@@ -55,7 +55,7 @@ const CLASSIFIED_FIELDS = new Set([
   "camera_default_label",
 ]);
 
-const DERIVED_FIELDS = new Set(["time_pressure", "workspace_name", "next_event_label"]);
+const DERIVED_FIELDS = new Set(["time_pressure", "workspace_name"]);
 
 function fieldClassification(field: string): FieldClassification {
   if (field.includes("summary")) return "summary";

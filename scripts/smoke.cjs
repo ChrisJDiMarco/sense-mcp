@@ -1,30 +1,50 @@
-// Smoke test: spawn the server, call get_context_frame, print the frame.
-const { spawn } = require("child_process");
-const path = require("path");
+// Deterministic transport smoke: spawn the server through the official MCP
+// client, complete the current handshake, and read cached broker context
+// without forcing hardware I/O.
+const path = require("node:path");
 
-const server = path.join(__dirname, "..", "dist", "index.js");
-const p = spawn("node", [server], { env: process.env });
-const send = (o) => p.stdin.write(JSON.stringify(o) + "\n");
-let buf = "";
+async function main() {
+  const [{ Client }, { StdioClientTransport }] = await Promise.all([
+    import("@modelcontextprotocol/sdk/client/index.js"),
+    import("@modelcontextprotocol/sdk/client/stdio.js"),
+  ]);
+  const server = path.join(__dirname, "..", "dist", "index.js");
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter((entry) => entry[1] !== undefined),
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [server],
+    cwd: path.dirname(server),
+    env,
+    stderr: "pipe",
+  });
+  let stderr = "";
+  transport.stderr?.on("data", (chunk) => {
+    stderr = `${stderr}${chunk}`.slice(-4_096);
+  });
+  const client = new Client({ name: "sense-smoke", version: "1" });
 
-p.stdout.on("data", (d) => {
-  buf += d;
-  for (const line of buf.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const m = JSON.parse(line);
-      if (m.id === 3) {
-        console.log(m.result.content[0].text);
-        p.kill();
-        process.exit(0);
-      }
-    } catch {}
+  try {
+    await client.connect(transport);
+    const result = await client.callTool(
+      { name: "get_context_frame", arguments: { refresh: "cached" } },
+      undefined,
+      { timeout: 15_000 },
+    );
+    if (result.isError || result.structuredContent?.ok !== true) {
+      throw new Error("get_context_frame did not return successful structured content");
+    }
+    console.log(JSON.stringify(result.structuredContent));
+  } catch (error) {
+    if (stderr.trim()) console.error(stderr.trim());
+    throw error;
+  } finally {
+    await client.close().catch(() => undefined);
   }
-});
-p.stderr.on("data", (d) => console.error("[server]", String(d).trim()));
+}
 
-send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "smoke", version: "0" } } });
-setTimeout(() => send({ jsonrpc: "2.0", method: "notifications/initialized" }), 200);
-// give sensors a moment to prime (osascript can be slow on first run)
-setTimeout(() => send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "get_context_frame", arguments: {} } }), 4000);
-setTimeout(() => { console.error("TIMEOUT"); p.kill(); process.exit(1); }, 15000);
+main().catch((error) => {
+  console.error(`SMOKE FAILED: ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
+});

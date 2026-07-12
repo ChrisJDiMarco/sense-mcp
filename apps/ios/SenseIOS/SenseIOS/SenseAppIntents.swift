@@ -26,9 +26,10 @@ struct SaveQuickStateIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
+        try ProtectedShortcutDraftStore().save(
+            ShortcutDraft(feeling: feeling, note: note)
+        )
         UserDefaults.standard.set(true, forKey: "LaunchCheckIn")
-        UserDefaults.standard.set(feeling, forKey: "ShortcutFeeling")
-        UserDefaults.standard.set(note, forKey: "ShortcutNote")
         return .result()
     }
 }

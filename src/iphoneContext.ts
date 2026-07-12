@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { atomicWritePrivateFile, readPrivateText, removePrivateFile } from "./privateFiles.js";
 import type { Observation } from "./types.js";
 
 const MAX_NOTE_CHARS = 1_000;
@@ -8,6 +8,8 @@ const MAX_HINT_CHARS = 120;
 const MAX_LABEL_CHARS = 80;
 const MAX_TAGS = 8;
 const MAX_CONTEXT_TTL_MS = 24 * 60 * 60 * 1_000;
+const MAX_GENERATED_AT_FUTURE_SKEW_MS = 5 * 60 * 1_000;
+const MAX_CONTEXT_FILE_BYTES = 32 * 1_024;
 
 const ALLOWED_PRIVACY_KEYS = new Set([
   "scope",
@@ -130,29 +132,47 @@ function cleanIsoDate(value: unknown, fallback: Date): string {
   return new Date(ms).toISOString();
 }
 
+class ExpiredIphoneContextError extends Error {
+  constructor() {
+    super("iphone context is already expired");
+    this.name = "ExpiredIphoneContextError";
+  }
+}
+
+function requiredIsoDate(value: unknown, field: "generated_at" | "expires_at"): number {
+  if (typeof value !== "string") throw new Error(`${field} must be an ISO-8601 timestamp`);
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds)) throw new Error(`${field} must be an ISO-8601 timestamp`);
+  return milliseconds;
+}
+
 export function iphoneContextPath(env: Record<string, string | undefined> = process.env): string {
   return env.SENSE_IPHONE_CONTEXT_PATH || path.join(os.homedir(), ".sense-mcp", "iphone-context.json");
 }
 
-export function sanitizeIphoneContextPayload(input: unknown): IphoneContextPayload {
+export function sanitizeIphoneContextPayload(input: unknown, nowMs = Date.now()): IphoneContextPayload {
   if (!input || typeof input !== "object") {
     throw new Error("invalid iphone context payload");
   }
 
   const body = input as Record<string, unknown>;
+  if (body.type !== "sense_ios_check_in") throw new Error("invalid iphone context payload type");
   const state =
     body.internal_state && typeof body.internal_state === "object"
       ? (body.internal_state as Record<string, unknown>)
       : {};
-  const now = new Date();
-  const generatedAt = cleanIsoDate(body.generated_at, now);
-  const generatedMs = Date.parse(generatedAt);
-  const requestedExpiry = Date.parse(cleanIsoDate(body.expires_at, new Date(generatedMs + 2 * 60 * 60 * 1_000)));
-  const maxExpiry = generatedMs + MAX_CONTEXT_TTL_MS;
-  const expiresAt = new Date(Math.min(requestedExpiry, maxExpiry));
-  if (expiresAt.getTime() <= now.getTime()) {
-    throw new Error("iphone context is already expired");
+  const generatedMs = requiredIsoDate(body.generated_at, "generated_at");
+  const requestedExpiry = requiredIsoDate(body.expires_at, "expires_at");
+  if (generatedMs > nowMs + MAX_GENERATED_AT_FUTURE_SKEW_MS) {
+    throw new Error("generated_at exceeds the allowed device clock skew");
   }
+  if (requestedExpiry <= nowMs) throw new ExpiredIphoneContextError();
+  if (requestedExpiry <= generatedMs) throw new Error("expires_at must be later than generated_at");
+  if (requestedExpiry - generatedMs > MAX_CONTEXT_TTL_MS) {
+    throw new Error("iphone context may not remain active for more than 24 hours");
+  }
+  const generatedAt = new Date(generatedMs).toISOString();
+  const expiresAt = new Date(requestedExpiry);
 
   const rawFeeling = cleanString(state.feeling, "steady", MAX_LABEL_CHARS).toLowerCase();
   const feeling = ALLOWED_FEELINGS.has(rawFeeling) ? rawFeeling : "steady";
@@ -258,9 +278,39 @@ export async function writeIphoneContextPayload(
   file = iphoneContextPath(),
 ): Promise<IphoneContextPayload> {
   const payload = sanitizeIphoneContextPayload(input);
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  const serialized = `${JSON.stringify(payload, null, 2)}\n`;
+  if (Buffer.byteLength(serialized) > MAX_CONTEXT_FILE_BYTES) {
+    throw new Error("iphone context payload is too large");
+  }
+
+  await atomicWritePrivateFile(file, serialized, { maxBytes: MAX_CONTEXT_FILE_BYTES });
   return payload;
+}
+
+export async function readActiveIphoneContextPayload(
+  file = iphoneContextPath(),
+  nowMs = Date.now(),
+): Promise<IphoneContextPayload | undefined> {
+  try {
+    const parsed = JSON.parse(await readPrivateText(file, MAX_CONTEXT_FILE_BYTES)) as unknown;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as { expires_at?: unknown }).expires_at === "string"
+    ) {
+      const expiry = Date.parse((parsed as { expires_at: string }).expires_at);
+      if (Number.isFinite(expiry) && expiry <= nowMs) {
+        await removePrivateFile(file).catch(() => undefined);
+        return undefined;
+      }
+    }
+    return sanitizeIphoneContextPayload(parsed, nowMs);
+  } catch (error) {
+    if (error instanceof ExpiredIphoneContextError) {
+      await removePrivateFile(file).catch(() => undefined);
+    }
+    return undefined;
+  }
 }
 
 export function iphoneContextObservation(payload: IphoneContextPayload, now = Date.now()): Observation | null {
@@ -340,12 +390,8 @@ function addIphoneContextFields(
 }
 
 export async function readIphoneContextObservation(file = iphoneContextPath()): Promise<Observation[]> {
-  try {
-    const parsed = JSON.parse(await readFile(file, "utf8")) as unknown;
-    const payload = sanitizeIphoneContextPayload(parsed);
-    const observation = iphoneContextObservation(payload);
-    return observation ? [observation] : [];
-  } catch {
-    return [];
-  }
+  const payload = await readActiveIphoneContextPayload(file);
+  if (!payload) return [];
+  const observation = iphoneContextObservation(payload);
+  return observation ? [observation] : [];
 }

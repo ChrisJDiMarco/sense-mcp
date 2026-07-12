@@ -2,6 +2,8 @@ import SwiftUI
 import UIKit
 
 struct RootView: View {
+    @EnvironmentObject private var store: CheckInStore
+
     var body: some View {
         TabView {
             CheckInView()
@@ -25,6 +27,18 @@ struct RootView: View {
                 }
         }
         .tint(.blue)
+        .alert(
+            "Pair with this Mac?",
+            isPresented: Binding(
+                get: { store.pendingPairingHost != nil },
+                set: { if !$0 { store.clearPendingPairing() } }
+            )
+        ) {
+            Button("Pair Securely") { store.confirmPendingPairing() }
+            Button("Cancel", role: .cancel) { store.clearPendingPairing() }
+        } message: {
+            Text("Future check-ins will be sent to \(store.pendingPairingHost ?? "this Mac").")
+        }
     }
 }
 
@@ -132,9 +146,17 @@ struct CheckInView: View {
                         .keyboardType(.URL)
                         .autocorrectionDisabled()
 
-                    TextField("Bridge Token", text: $store.bridgeTokenString)
+                    SecureField("Pairing secret (stored in Keychain)", text: $store.bridgeTokenString)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+
+                    Button {
+                        if store.handlePairingLink(UIPasteboard.general.string ?? "") {
+                            UIPasteboard.general.items = []
+                        }
+                    } label: {
+                        Label("Paste Pairing Link", systemImage: "link.badge.plus")
+                    }
 
                     HStack {
                         Label("Status", systemImage: store.bridgeStatus.systemImage)
@@ -198,7 +220,7 @@ struct CheckInView: View {
                 PayloadPreviewView(payload: store.payloadJSON(store.previewPayload(sensorSnapshot: sensors.latest)))
             }
             .onAppear {
-                syncShortcutDraft()
+                store.consumeShortcutDraft()
                 if store.shouldStartListening {
                     store.shouldStartListening = false
                     Task { await recorder.start() }
@@ -229,19 +251,6 @@ struct CheckInView: View {
             TextEditor(text: noteBinding)
                 .frame(minHeight: 128)
                 .scrollContentBackground(.hidden)
-        }
-    }
-
-    private func syncShortcutDraft() {
-        let defaults = UserDefaults.standard
-        if let shortcutFeeling = defaults.string(forKey: "ShortcutFeeling"),
-           let feeling = FeelingTag(rawValue: shortcutFeeling.lowercased()) {
-            store.selectedFeeling = feeling
-            defaults.removeObject(forKey: "ShortcutFeeling")
-        }
-        if let shortcutNote = defaults.string(forKey: "ShortcutNote"), !shortcutNote.isEmpty {
-            store.note = shortcutNote
-            defaults.removeObject(forKey: "ShortcutNote")
         }
     }
 
@@ -387,7 +396,7 @@ struct SetupView: View {
     cd sense-mcp
     npm install
     npm run build
-    node dist/index.js settings --open
+    node dist/index.js settings --lan --open
     """
     private let codexConfig = """
     [mcp_servers.sense]
@@ -433,6 +442,14 @@ struct SetupView: View {
                         .keyboardType(.URL)
                         .autocorrectionDisabled()
 
+                    Button {
+                        if store.handlePairingLink(UIPasteboard.general.string ?? "") {
+                            UIPasteboard.general.items = []
+                        }
+                    } label: {
+                        Label("Paste Pairing Link", systemImage: "link.badge.plus")
+                    }
+
                     HStack {
                         Label("Status", systemImage: store.bridgeStatus.systemImage)
                         Spacer()
@@ -454,7 +471,7 @@ struct SetupView: View {
                 } header: {
                     Text("Local Bridge")
                 } footer: {
-                    Text("The simulator can use 127.0.0.1. For a physical iPhone, run sense-mcp settings --lan --open on the Mac, then paste the LAN URL and token here.")
+                    Text("Run sense-mcp settings --lan --open on the Mac, then tap Paste Pairing Link. The secret moves into Keychain and is cleared from the clipboard.")
                 }
 
                 Section {
@@ -486,7 +503,7 @@ struct SetupView: View {
                 Section("Privacy") {
                     PrivacyRow(systemImage: "waveform", title: "No Audio Retention", detail: "The app keeps text context, not microphone recordings.")
                     PrivacyRow(systemImage: "timer", title: "Expiring Context", detail: "Each check-in includes an expiration window.")
-                    PrivacyRow(systemImage: "network", title: "Local Bridge", detail: "The default endpoint is local to your own machine.")
+                    PrivacyRow(systemImage: "network", title: "Local Bridge", detail: "Sense starts unpaired with no default endpoint. Pair with a local Mac before sending.")
                 }
             }
             .listStyle(.insetGrouped)
@@ -1403,6 +1420,7 @@ extension BridgeStatus {
         case .idle: return "circle"
         case .savedLocally: return "tray"
         case .sending: return "arrow.up.circle"
+        case .paired: return "lock.shield.fill"
         case .connected: return "checkmark.circle.fill"
         case .sent: return "checkmark.circle.fill"
         case .receiptError: return "doc.text.magnifyingglass"
@@ -1416,6 +1434,7 @@ extension BridgeStatus {
         case .idle: return .secondary
         case .savedLocally: return .blue
         case .sending: return .blue
+        case .paired: return .green
         case .connected: return .green
         case .sent: return .green
         case .receiptError: return .orange

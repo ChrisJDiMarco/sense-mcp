@@ -40,12 +40,13 @@ export const devicesSensor: Sensor = {
   name: "devices",
   intervalMs: 120_000,
   tier: 1,
+  domains: ["environment"],
   capability: "device_context",
   available: async () => isMac,
-  async sample(): Promise<Observation[]> {
+  async sample(signal): Promise<Observation[]> {
     const [displayOut, bluetoothOut] = await Promise.all([
-      run("system_profiler", ["SPDisplaysDataType"], 5000),
-      run("system_profiler", ["SPBluetoothDataType"], 7000),
+      run("system_profiler", ["SPDisplaysDataType"], 5000, signal),
+      run("system_profiler", ["SPBluetoothDataType"], 7000, signal),
     ]);
 
     const fields: Record<string, string | number | boolean> = {};

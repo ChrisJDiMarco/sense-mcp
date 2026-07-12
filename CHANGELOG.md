@@ -7,6 +7,51 @@ add or refine capabilities, and patch versions are reserved for compatible fixes
 
 ## Unreleased
 
+### Security and runtime hardening
+
+- Added one per-user broker so Codex, Claude, and other MCP adapters share one
+  scheduler and state store. Adapters reconnect and elect a replacement after
+  broker loss.
+- Added non-overlapping completion-based sensor scheduling, cancellation,
+  availability rechecks, bounded backoff, jitter, domain refresh, and
+  field-level expiry.
+- Added a private central policy file with strict defaults, hot reload, CLI
+  toggles, and per-key environment migration fallbacks.
+- Added app-window capture as the default screen tool, a separate full-screen
+  tool, and a deprecated window-only compatibility alias for
+  `take_screen_snapshot`.
+- Added local allow-once consent receipts bound to media kind, scope, target,
+  normalized reason, and expiry. Every camera, window, and full-screen receipt
+  is single-use and consumed immediately before acquisition. Policy is checked
+  before and after acquisition and after private-file finalization. Window
+  receipts bind a validated owner app, process, on-screen window id, and bounds.
+- Replaced Calendar AppleScript with optional headless `icalBuddy`; Sense no
+  longer launches Calendar.app.
+- Enforced complete-response byte ceilings and added compact, brief, focused,
+  debug, and diff context projections with conservative token estimates.
+- Moved policy, consent, ledger, snapshots, broker metadata, and iPhone context
+  to bounded private atomic storage with symlink rejection.
+- Replaced iPhone Bearer-token transport with AES-256-GCM request and response
+  envelopes, replay/skew/body limits, Keychain secret storage, and a
+  secret-bearing clipboard pairing handoff. Removed plaintext loopback fallback
+  and moved local check-in history from `UserDefaults` to bounded, protected,
+  expiring file storage.
+- Replaced the localhost panel's reusable launch URL with a private `0600`
+  launcher, one-use request-body bootstrap, and distinct HttpOnly session;
+  authenticated every panel API and removed the fixed-header plaintext iPhone
+  endpoint.
+- Stopped storing caller-controlled ledger reasons and errors as plaintext.
+  Entries now keep fixed summaries/classes plus SHA-256 hashes for correlation,
+  and migrate older plaintext rows under the ledger lock.
+- Updated MCP tools to current SDK registration, input/output schemas,
+  annotations, structured content, and machine-readable errors.
+- Made `doctor` enforce Node 22, validate enabled `ffmpeg`/`icalBuddy` features,
+  probe live Calendar diagnostics, and discover secured panels on custom ports
+  through private runtime receipts.
+- Moved iOS shortcut drafts out of `UserDefaults` into bounded, atomic,
+  complete-file-protected storage and aligned LAN pairing address selection with
+  the iOS local-address validator.
+
 ### Changed
 
 - Refreshed the GitHub README with a stronger project narrative, clearer
@@ -19,7 +64,7 @@ add or refine capabilities, and patch versions are reserved for compatible fixes
 
 ### Added
 
-- GitHub Actions CI for the README's Node 20/22 release signal.
+- GitHub Actions CI for Node 22 and Node 24.
 - `sense-mcp settings --open` as a clearer alias for the local settings panel,
   plus first-run and doctor guidance that points users to it.
 - Context broker metadata on `get_relevant_context`: expected value, token
@@ -46,16 +91,16 @@ add or refine capabilities, and patch versions are reserved for compatible fixes
 
 - Ignored generated Xcode build/user-state artifacts so the iOS companion source
   can be shared without local build noise.
-- Hardened iPhone bridge writes with a companion header and documented the
-  localhost-only physical-device limitation.
-- Kept LAN bridge mode separate from the localhost settings panel and protected
-  LAN writes with a bearer token.
+- Hardened iPhone bridge writes with a companion header and documented that
+  physical-device sync requires the explicitly enabled encrypted LAN bridge on
+  a trusted network.
+- Kept LAN bridge mode separate from the localhost settings panel.
 - Mic level sampling now prefers a real microphone input over virtual audio
   devices when `SENSE_MIC_DEVICE_INDEX` is unset.
 - Calendar timeouts now surface as diagnostics instead of silent missing
   schedule context.
-- Ledger reason redaction covers emails, URLs, long numbers/codes, and common
-  secret keywords.
+- Ledger writes use fixed reason summaries and error classes instead of
+  caller-controlled plaintext.
 
 ## [0.1.0] - 2026-06-15
 
