@@ -110,24 +110,30 @@ Sense is built around one constraint:
 | Ephemeral | Context frames describe now and expire quickly. |
 | Semantic by default | The server emits classified states, not raw private content. |
 | Exact media consent | Every camera, window, or full-screen capture needs local allow-once approval. |
-| Temporary artifacts | Snapshot files are stored in a private temp directory and cleaned up later. |
-| Auditability | A local privacy ledger records tool-call metadata without storing frames or pixels. |
+| Temporary artifacts | Snapshot files use a private temp directory. They become eligible for opportunistic cleanup after two hours and may remain longer while Sense is idle. |
+| Auditability | A bounded local ledger stores tool metadata, fixed summaries and hashes, and artifact paths without storing frames, pixels, or caller-provided reason and error text. Set `SENSE_LEDGER_DISABLED=1` to disable it. |
 
 Read the full privacy model in [docs/PRIVACY.md](./docs/PRIVACY.md).
 
+Sense does not defend against administrators, malware, compromised MCP clients,
+or another process running as the same OS user. Local consent limits accidental
+and remote tool misuse; it is not an operating-system sandbox.
+
 ## Current Status
 
-`v0.1.0` public preview.
+The latest tagged release is [`v0.1.0`](https://github.com/ChrisJDiMarco/sense-mcp/releases/tag/v0.1.0).
+`main` also contains the unreleased v1 hardening pass. Sense is not published to
+npm yet, so install the current code from a GitHub source checkout.
 
 Sense is client-agnostic MCP. The built-in sensors are macOS-first today, and
 unavailable sensors degrade gracefully with diagnostics instead of hard failure.
 
 Release checks:
 
-| Check | Current result |
+| Check | Command or matrix |
 |---|---:|
-| Full validation | `npm run check` |
-| Package contents and size | `npm run check:package` |
+| Node build, tests, evals, and audits | `npm run check` |
+| Node and package preflight | `npm run release:dry-run` |
 | iOS companion | `npm run ios:build` |
 | CI matrix | Node 22 and Node 24 |
 
@@ -141,7 +147,7 @@ Today, the recommended install path is a GitHub source checkout:
 ```bash
 git clone https://github.com/ChrisJDiMarco/sense-mcp.git
 cd sense-mcp
-npm install
+npm ci
 npm run build
 ```
 
@@ -176,7 +182,7 @@ The settings panel lets users review central policy, toggle supported
 capabilities, inspect broker and sensor health, and view the local privacy
 ledger. Policy changes hot-reload in the shared broker.
 
-Run the full local validation suite with:
+Run the Node validation suite with:
 
 ```bash
 npm run check
@@ -195,7 +201,9 @@ If Sense is later installed globally, replace `node dist/index.js` with
 | `full` | Camera, app-window, and mic level | Broader semantic context with explicit media policy. |
 
 Raw window titles are never enabled by a profile. Use `--raw-titles` only when
-you intentionally want redacted title exposure.
+you intentionally accept best-effort redaction. Emails, HTTP(S) URLs, and long
+digit sequences are stripped, but names, schemeless URLs, and other sensitive
+title text may remain.
 
 ## Requirements
 
@@ -203,7 +211,7 @@ you intentionally want redacted title exposure.
 |---|---|
 | Node.js 22+ | Runs the MCP server. |
 | macOS | Current OS sensors use macOS APIs. |
-| `ffmpeg` | Camera snapshots and mic-level sampling. |
+| `ffmpeg` (optional) | Required for camera snapshots and mic-level sampling. |
 | `icalBuddy` (optional) | Headless local Calendar timing when Calendar policy is enabled. |
 | macOS permissions | Camera, Screen Recording, Microphone, Accessibility/Automation as needed. |
 
@@ -244,9 +252,9 @@ SENSE_WORKSPACE_ROOTS = "/absolute/path/to/workspace"
 For ongoing changes, prefer central CLI policy:
 
 ```bash
-sense-mcp enable camera
-sense-mcp enable screen
-sense-mcp disable full-screen
+node dist/index.js enable camera
+node dist/index.js enable screen
+node dist/index.js disable full-screen
 ```
 
 The private policy file is authoritative per key. Environment variables apply
@@ -273,7 +281,7 @@ SENSE_WORKSPACE_ROOTS=/absolute/path/to/workspace
 Then enable app-window capture in central policy:
 
 ```bash
-sense-mcp enable screen
+node dist/index.js enable screen
 ```
 
 See [docs/clients/claude-code.md](./docs/clients/claude-code.md).
@@ -355,23 +363,43 @@ use local context. The iPhone app adds an intentional self-report channel:
 - expiring semantic context payloads
 - in-app GitHub, install command, MCP config, pairing, and connection test
 
-The iPhone signals are opt-in and summarized before sync. Sense does not retain
-raw audio; the companion sends noise class and dBFS meter values only. HealthKit
-data is reduced to broad fields such as steps, active energy, heart rate, and
-sleep minutes.
-
-The companion keeps at most 12 unexpired local check-ins in a 256 KiB-capped,
-atomic Application Support file with complete file protection. It migrates and
-removes legacy `UserDefaults` history, prunes exact-expiry records from memory
-and disk, and starts unpaired with no localhost fallback.
-
-The Mac stores the latest accepted expiring payload in
-`~/.sense-mcp/iphone-context.json` by default. Override that path with
-`SENSE_IPHONE_CONTEXT_PATH`. Physical iPhone sync is not exposed on LAN by
-default. Start the bridge-only listener explicitly on a trusted network:
+The companion is a source-only developer preview, not an App Store or TestFlight
+download. It requires iOS 18. To run it on a physical iPhone, open the Xcode
+project, choose your Apple development team, replace the bundle identifier with
+one your team can sign, select the device, and run:
 
 ```bash
-sense-mcp settings --lan --open
+open apps/ios/SenseIOS/SenseIOS.xcodeproj
+```
+
+Sending each check-in is explicit. Device state is included by default and can
+be disabled. Motion, ambient-noise, and Health fields are off until enabled;
+their OS permissions still apply. These are bounded structured fields rather
+than raw streams, but some values are exact numbers, including battery level,
+steps, distance, dBFS, active energy, heart rate, and sleep minutes.
+
+Sense does not retain microphone recordings. Ambient-noise metering creates a
+short-lived local audio file and deletes it after the sample. Voice check-ins
+retain the transcript as the check-in note. Transcription uses Apple's Speech
+framework and is not guaranteed to remain on-device.
+
+The companion keeps up to 12 local check-ins in a 256 KiB-capped, atomic
+Application Support file with complete file protection. It prunes expired
+records on the next load or use. It removes legacy `UserDefaults` history only
+after protected persistence succeeds, and starts unpaired with no localhost
+fallback.
+
+The Mac stores the latest accepted expiring payload in
+`~/.sense-mcp/iphone-context.json` by default. It is permission-restricted
+plaintext JSON, not encrypted at rest by Sense, and may include the check-in
+note plus enabled device, motion, noise, or Health fields. Expired payloads are
+removed when Sense next reads the file. Override the path with
+`SENSE_IPHONE_CONTEXT_PATH`.
+Physical iPhone sync is not exposed on LAN by default. Start the bridge-only
+listener explicitly from the source checkout on a trusted network:
+
+```bash
+node dist/index.js settings --lan --open
 ```
 
 Sense copies a secret-bearing pairing deep link to the clipboard and does not
@@ -381,10 +409,12 @@ stores the secret in Keychain and accepts only private, link-local, loopback,
 mDNS, or shared carrier-grade NAT (`100.64.0.0/10`) targets. Every request,
 including loopback, requires that secret. Accepted request payloads and
 successful response payloads use AES-256-GCM with method/path/timestamp/nonce
-binding, replay protection, clock-skew checks, and body limits. Successful
-encrypted responses are bound to their request nonce; rejected requests return
-generic plaintext errors. There is no Bearer-token mode, and panel settings
-APIs are not exposed on LAN.
+binding, per-process nonce replay rejection, a five-minute clock-skew window,
+and body limits. Successful encrypted responses are bound to their request
+nonce; rejected requests return generic plaintext errors. The listener uses
+local HTTP, so network observers can still see addresses, paths, sizes, and
+timing. There is no Bearer-token mode, and panel settings APIs are not exposed
+on LAN.
 
 ## MCP Tools
 
@@ -402,9 +432,20 @@ APIs are not exposed on LAN.
 | `take_full_screen_snapshot` | Main-display capture with explicit full-screen confirmation and local consent. | Yes |
 | `take_screen_snapshot` | Deprecated window-only alias for `take_window_snapshot`; never full-screen. | Yes |
 
+## MCP Resources
+
+| URI | Purpose |
+|---|---|
+| `sense://context/current` | Compact cached semantic context. Reading it never forces a sensor refresh. |
+| `sense://privacy` | Current privacy tier and per-capability status. |
+| `sense://health` | Current broker or local-provider health and bounded diagnostics. |
+
 Every ContextFrame includes a `privacy` block with per-capability status:
 `granted`, `denied`, or `unavailable`. `capability_states` separately reports
-`disabled`, `permission_denied`, `no_signal`, `degraded`, `stale`, or `healthy`.
+`disabled`, `permission_denied`, `unavailable`, `no_signal`, `degraded`, `stale`,
+or `healthy`. For denied or unavailable capabilities,
+`privacy.capability_details` can include the sensor, state, reason, detail, and
+fix hint.
 
 Context tools accept `compact`, `brief`, `focused`, `debug`, and `diff`
 projections plus `cached`, `if_stale`, or `force` refresh. The reported
@@ -430,7 +471,7 @@ refresh is limited to sensors declared for the requested domains.
 | `ambient-light` | Lighting class when an ALS sensor exists | macOS `ioreg` |
 | `audio-level` | Opt-in noise class and dB level, never audio content | `ffmpeg` AVFoundation |
 | `focus-mode` | Env/Shortcuts bridge for Focus/DND mode | env or macOS Shortcuts |
-| `camera` | On-demand camera capture only when policy and consent allow it | `ffmpeg` AVFoundation |
+| `camera` | Capture-enabled and consent-required status; acquisition happens only inside the explicit snapshot tool | policy plus `ffmpeg` AVFoundation when the tool runs |
 | `health-bridge` | Optional local health/wearable semantic JSON | local JSON file |
 | `weather-bridge` | Optional local weather/daylight semantic JSON | local JSON file |
 | `iphone-context-bridge` | Optional expiring self-report context from the iOS companion | local JSON file |
@@ -444,14 +485,14 @@ connector for account-backed schedule data.
 Use central policy for sensitive capabilities:
 
 ```bash
-sense-mcp enable calendar
-sense-mcp enable location
-sense-mcp enable camera
-sense-mcp enable screen
-sense-mcp enable full-screen
-sense-mcp enable mic
-sense-mcp enable raw-titles
-sense-mcp disable full-screen
+node dist/index.js enable calendar
+node dist/index.js enable location
+node dist/index.js enable camera
+node dist/index.js enable screen
+node dist/index.js enable full-screen
+node dist/index.js enable mic
+node dist/index.js enable raw-titles
+node dist/index.js disable full-screen
 ```
 
 All listed sensitive capabilities default off. Existing environment variables
@@ -469,6 +510,7 @@ key.
 | `SENSE_MIC_LEVEL=1` | Enables one-second mic level sampling for `noise_class`. |
 | `SENSE_MIC_DEVICE_INDEX=2` | Selects the AVFoundation audio device index. |
 | `SENSE_WORKSPACE_ROOTS=/path/to/repo` | Enables git branch/dirty-count context. |
+| `SENSE_RAW_TITLES=1` | Enables best-effort-redacted raw window titles. |
 | `SENSE_HOME_WIFI_SSIDS=ssid1,ssid2` | Classifies home Wi-Fi without emitting SSIDs. |
 | `SENSE_OFFICE_WIFI_SSIDS=ssid1,ssid2` | Classifies office Wi-Fi without emitting SSIDs. |
 | `SENSE_FOCUS_MODE=deep_work` | Manual Focus/DND semantic override. |
@@ -507,6 +549,8 @@ node dist/index.js status
 node dist/index.js doctor
 node dist/index.js ledger
 node dist/index.js consent list
+node dist/index.js consent revoke <receipt-id>
+node dist/index.js consent revoke all
 node dist/index.js settings --open
 node dist/index.js settings --lan --open
 node dist/index.js enable camera
@@ -518,10 +562,16 @@ node dist/index.js enable workspace /absolute/path/to/workspace
 node dist/index.js disable mic
 ```
 
-`doctor` enforces Node 22+, checks `ffmpeg` for enabled camera or mic features,
+`enable workspace` writes `SENSE_WORKSPACE_ROOTS` into Codex configuration.
+For Claude Desktop, Claude Code, and other clients, set that environment
+variable in the client's MCP configuration instead.
+
+`doctor` checks for Node 22+, checks `ffmpeg` for enabled camera or mic features,
 checks `icalBuddy` and live Calendar diagnostics when Calendar context is
 enabled, and discovers an authenticated settings panel on its actual port from
-a private runtime receipt. It gives actionable setup checks:
+a private runtime receipt. Its client-config check only verifies that the Codex
+config file is readable; it does not validate the Sense registration or inspect
+other clients. It gives actionable setup checks:
 
 ```text
 PASS Node.js: v22.0.0
@@ -609,6 +659,7 @@ import type { Sensor, Observation } from "../types.js";
 
 export const mySensor: Sensor = {
   name: "battery",
+  tier: 1,
   intervalMs: 30_000,
   domains: ["environment"],
   async sample(signal?: AbortSignal): Promise<Observation[]> {
