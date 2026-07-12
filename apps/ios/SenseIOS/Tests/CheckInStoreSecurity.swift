@@ -202,10 +202,18 @@ struct CheckInStoreSecurity {
     }
 
     private static func verifyProtectedFilePersistence() throws {
-        guard ProtectedCheckInFileStore.writeOptions.contains(.atomic),
-              ProtectedCheckInFileStore.writeOptions.contains(.completeFileProtection),
+        guard ProtectedCheckInFileStore.writeOptions.contains(.atomic) else {
+            throw TestError.protection
+        }
+        #if os(iOS)
+        guard ProtectedCheckInFileStore.writeOptions.contains(.completeFileProtection),
               ProtectedCheckInFileStore.fileProtection == .complete
         else { throw TestError.protection }
+        #else
+        guard !ProtectedCheckInFileStore.writeOptions.contains(.completeFileProtection) else {
+            throw TestError.protection
+        }
+        #endif
 
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("sense-protected-store-\(UUID().uuidString)", isDirectory: true)
@@ -214,10 +222,13 @@ struct CheckInStoreSecurity {
         let persistence = ProtectedCheckInFileStore(fileURL: file, maximumBytes: 1_024)
         let sample = Data("protected-check-in".utf8)
         try persistence.save(sample)
+        guard try persistence.load() == sample else { throw TestError.persistence }
+        #if os(iOS)
         let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
-        guard try persistence.load() == sample,
-              attributes[.protectionKey] as? FileProtectionType == .complete
-        else { throw TestError.protection }
+        guard attributes[.protectionKey] as? FileProtectionType == .complete else {
+            throw TestError.protection
+        }
+        #endif
 
         do {
             try persistence.save(Data(repeating: 0, count: 1_025))
@@ -236,10 +247,13 @@ struct CheckInStoreSecurity {
         let drafts = ProtectedShortcutDraftStore(persistence: persistence)
         let draft = ShortcutDraft(feeling: "focused", note: "private Action Button note")
         try drafts.save(draft)
+        guard try drafts.load() == draft else { throw TestError.shortcutDraft }
+        #if os(iOS)
         let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
-        guard try drafts.load() == draft,
-              attributes[.protectionKey] as? FileProtectionType == .complete
-        else { throw TestError.shortcutDraft }
+        guard attributes[.protectionKey] as? FileProtectionType == .complete else {
+            throw TestError.protection
+        }
+        #endif
 
         do {
             try drafts.save(ShortcutDraft(feeling: "steady", note: String(repeating: "x", count: 2_048)))

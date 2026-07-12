@@ -16,7 +16,11 @@ protocol CheckInPersisting {
 
 struct ProtectedCheckInFileStore: CheckInPersisting {
     private static let hardMaximumBytes = 256 * 1_024
+    #if os(iOS)
     static let writeOptions: Data.WritingOptions = [.atomic, .completeFileProtection]
+    #else
+    static let writeOptions: Data.WritingOptions = [.atomic]
+    #endif
     static let fileProtection: FileProtectionType = .complete
 
     let fileURL: URL
@@ -54,6 +58,7 @@ struct ProtectedCheckInFileStore: CheckInPersisting {
     func save(_ data: Data) throws {
         guard data.count <= maximumBytes else { throw CheckInPersistenceError.exceedsLimit }
         let directory = fileURL.deletingLastPathComponent()
+        #if os(iOS)
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true,
@@ -63,16 +68,24 @@ struct ProtectedCheckInFileStore: CheckInPersisting {
             [.protectionKey: Self.fileProtection],
             ofItemAtPath: directory.path
         )
+        #else
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        #endif
         var excludedDirectory = directory
         var resourceValues = URLResourceValues()
         resourceValues.isExcludedFromBackup = true
         try? excludedDirectory.setResourceValues(resourceValues)
 
         try data.write(to: fileURL, options: Self.writeOptions)
+        #if os(iOS)
         try FileManager.default.setAttributes(
             [.protectionKey: Self.fileProtection],
             ofItemAtPath: fileURL.path
         )
+        #endif
     }
 
     func remove() throws {
