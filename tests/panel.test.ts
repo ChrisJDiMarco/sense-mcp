@@ -14,6 +14,7 @@ import {
   startPanel,
 } from "../src/panel.js";
 import { openLanBridgePayload, sealLanBridgePayload } from "../src/lanBridge.js";
+import { snapshotDirectory } from "../src/snapshotFiles.js";
 
 function policy(values: Partial<PolicySnapshot["values"]> = {}): PolicySnapshot {
   const all = {
@@ -702,6 +703,122 @@ SENSE_CAMERA_SNAPSHOT = "1"
       ).toMatchObject({ status: 401 });
     } finally {
       await panel.close();
+    }
+  });
+  test("serves the panel for clients that never create a Codex config", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sense-panel-no-config-"));
+    const configPath = path.join(dir, "config.toml");
+    const panel = await startPanel({
+      port: 0,
+      configPath,
+      policyFile: path.join(dir, "policy.json"),
+      runtimeLoader: async () => undefined,
+    });
+    try {
+      const bootstrap = await bootstrapPanel(panel);
+      expect(bootstrap.response.status).toBe(303);
+      const root = await fetch(panel.url, { headers: { Cookie: bootstrap.cookie } });
+      expect(root.status).toBe(200);
+
+      const status = await fetch(`${panel.url}api/status`, {
+        headers: { Cookie: bootstrap.cookie },
+      });
+      expect(status.status).toBe(200);
+      expect((await status.json()).config_path).toBe(configPath);
+
+      const saved = await fetch(`${panel.url}api/permissions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: bootstrap.cookie },
+        body: JSON.stringify({ capability: "screen", enabled: true }),
+      });
+      expect(saved.status).toBe(200);
+      await expect(readFile(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await panel.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses to create a Codex config for a workspace root and hands back the env instruction", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sense-panel-no-config-workspace-"));
+    const configPath = path.join(dir, "config.toml");
+    const panel = await startPanel({
+      port: 0,
+      configPath,
+      policyFile: path.join(dir, "policy.json"),
+      runtimeLoader: async () => undefined,
+    });
+    try {
+      const bootstrap = await bootstrapPanel(panel);
+      const response = await fetch(`${panel.url}api/permissions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: bootstrap.cookie },
+        body: JSON.stringify({ capability: "workspace", enabled: true, value: "/tmp/workspace" }),
+      });
+      expect(response.status).toBe(409);
+      const body = await response.text();
+      expect(body).toContain("SENSE_WORKSPACE_ROOTS");
+      expect(body).toContain("/tmp/workspace");
+      await expect(readFile(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await panel.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reports the same snapshot directory the capture path writes to", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sense-panel-snapshot-dir-"));
+    const configPath = path.join(dir, "config.toml");
+    await writeFile(configPath, `model = "test"\n`);
+    const previous = process.env.SENSE_SNAPSHOT_DIR;
+    delete process.env.SENSE_SNAPSHOT_DIR;
+    const panel = await startPanel({
+      port: 0,
+      configPath,
+      policyFile: path.join(dir, "policy.json"),
+      runtimeLoader: async () => undefined,
+    });
+    try {
+      const bootstrap = await bootstrapPanel(panel);
+      const status = await fetch(`${panel.url}api/status`, {
+        headers: { Cookie: bootstrap.cookie },
+      }).then((res) => res.json());
+      expect(status.snapshot_dir).toBe(snapshotDirectory());
+    } finally {
+      await panel.close();
+      if (previous === undefined) delete process.env.SENSE_SNAPSHOT_DIR;
+      else process.env.SENSE_SNAPSHOT_DIR = previous;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("still lets the Codex config override the snapshot directory", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sense-panel-snapshot-override-"));
+    const configPath = path.join(dir, "config.toml");
+    const override = path.join(dir, "snapshots");
+    await writeFile(
+      configPath,
+      `[mcp_servers.sense.env]\nSENSE_SNAPSHOT_DIR = "${override}"\n`,
+    );
+    const previous = process.env.SENSE_SNAPSHOT_DIR;
+    delete process.env.SENSE_SNAPSHOT_DIR;
+    const panel = await startPanel({
+      port: 0,
+      configPath,
+      policyFile: path.join(dir, "policy.json"),
+      runtimeLoader: async () => undefined,
+    });
+    try {
+      const bootstrap = await bootstrapPanel(panel);
+      const status = await fetch(`${panel.url}api/status`, {
+        headers: { Cookie: bootstrap.cookie },
+      }).then((res) => res.json());
+      expect(status.snapshot_dir).toBe(override);
+    } finally {
+      await panel.close();
+      if (previous === undefined) delete process.env.SENSE_SNAPSHOT_DIR;
+      else process.env.SENSE_SNAPSHOT_DIR = previous;
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

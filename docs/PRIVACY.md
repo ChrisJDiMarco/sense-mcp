@@ -82,9 +82,21 @@ ceiling at three bytes per estimated token. Sense reports the byte ceiling,
 serialized bytes, conservative token estimate, and whether it selected a
 smaller projection. Exact token counts remain model-specific.
 
-Default estimates are 120 tokens for compact, 180 for brief, 280 for focused,
-1,200 for debug, and 140 for diff. Context inputs accept 96 to 4,096; router
-inputs accept 160 to 4,096 and default to 480.
+Default budgets are 1,150 tokens for compact, 1,500 for brief, 2,800 for
+focused, 5,600 for debug, and 800 for diff; `get_relevant_context` defaults to
+2,800. Every context tool and the router accept the same closed range, 320 to
+8,192. These defaults are ceilings, not costs: they are each the measured cost
+of that projection's complete output over a full frame plus headroom, so a
+stock response is not truncated. They are substantially higher than the earlier
+defaults, which is a deliberate trade. Measured on
+`docs/evals/real-frame-fixture.json`, a stock response now carries roughly four
+to eight times as many tokens into the model's context as the old ceilings
+allowed: `get_context_frame` 2,211 estimated tokens against an old ceiling of
+280, `get_screen_context` 1,020 against 180, `get_relevant_context` 1,958
+against 480. What it buys is that those responses are complete — under the old
+ceilings the same calls silently shed domains the caller asked for. A caller
+that wants the old footprint should pass `max_tokens` explicitly and read
+`context_omitted` to see what that costs.
 
 ## Local storage
 

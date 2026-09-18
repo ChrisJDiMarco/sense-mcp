@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   connectSenseBroker,
   defaultBrokerSocketPath,
@@ -44,14 +44,16 @@ async function main(): Promise<void> {
   // stderr only — stdout is the MCP transport
   console.error(`sense-mcp: connected to shared broker at ${defaultBrokerSocketPath()}`);
 
-  const server = createServer(provider);
-  await server.connect(new StdioServerTransport());
+  // serveStdio owns the transport and pins one server instance per connection.
+  const connection = serveStdio(() => createServer(provider), {
+    onerror: (error) => console.error("sense-mcp transport error:", error),
+  });
 
   let shuttingDown = false;
   const shutdown = async (exitCode = 0) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    await Promise.allSettled([provider.close(), server.close()]);
+    await Promise.allSettled([provider.close(), connection.close()]);
     process.exit(exitCode);
   };
   process.once("SIGINT", () => void shutdown());

@@ -7,6 +7,67 @@ add or refine capabilities, and patch versions are reserved for compatible fixes
 
 ## Unreleased
 
+### Breaking changes
+
+- **`max_tokens` now has a single, higher floor and a closed accepted range.**
+  Every context tool and `get_relevant_context` accept `320` to `8192`. The
+  previous floors were `96` for the context tools and `160` for the router, and
+  the previous ceiling was `4096`, so calls that were legal before — anything
+  below `320` — now fail schema validation. `320` is the smallest budget that
+  returns a domain body rather than a bare envelope; `8192` is the largest
+  budget the server will ever suggest retrying at, so a suggestion is always a
+  legal input.
+- **A budget shortfall is no longer an error.** A response that fits its budget
+  but could not carry every requested domain returns `ok: true` with the context
+  it has, `context_satisfied: false`, and a new `context_omitted` object naming
+  the omitted domains, the reason, and a `suggested_max_tokens` that returns the
+  complete response. `ok: false` with `context_budget_too_small` is now reserved
+  for a budget that cannot carry any response at all, and that error is marked
+  `retryable` only when a budget within the accepted range was measured to work. Clients that branched on
+  that error to detect truncation will now read a partial response as a complete
+  one unless they check `context_satisfied`.
+- **`context_satisfied` has a defined meaning.** It means "every requested
+  domain that has data is present in this response", and it is measured against
+  the frame the response was built from rather than asserted by the caller.
+- **`context_omitted` on `get_relevant_context` changed shape**, from a string to
+  the same `{ domains, reason, suggested_max_tokens? }` object the context tools
+  return.
+- **Default projection budgets rose substantially.** Defaults are now `1150`
+  compact, `1500` brief, `2800` focused, `5600` debug, `800` diff, and `2800` for
+  `get_relevant_context`. Each is the measured cost of that projection's
+  complete, untruncated output over a realistically full frame plus roughly 40%
+  headroom, so a stock call is no longer silently truncated. This is a real cost
+  decision: measured on `docs/evals/real-frame-fixture.json`, a stock
+  `get_context_frame` now returns 2,211 estimated tokens against an old ceiling
+  of 280, `get_screen_context` 1,020 against 180, and `get_relevant_context`
+  1,958 against 480. Callers that want the old footprint must pass `max_tokens`
+  explicitly and read `context_omitted` to see what it costs them.
+- **Tool listing order changed.** `get_relevant_context` is now the first tool a
+  client sees, because clients weight tool order and the routing discipline the
+  server instructions describe only holds if the planning tool comes before the
+  raw getters.
+- **The package no longer declares `main` or `types`.** `sense-mcp` is a binary,
+  not a library: importing it bound an MCP stdio transport to the importer's
+  stdout. A minimal `exports` map replaces them, and `"os": ["darwin"]` is now
+  declared because the `0700`/`0600` private-storage guarantees are no-ops off
+  macOS.
+
+### Protocol and dependencies
+
+- Moved from MCP SDK v1 (`@modelcontextprotocol/sdk`) to v2
+  (`@modelcontextprotocol/server`, with `@modelcontextprotocol/client` for
+  tests and the smoke check), and from Zod 3 to Zod 4.
+- **Fixed the advertised JSON Schema dialect.** Tool input and output schemas
+  now advertise `https://json-schema.org/draft/2020-12/schema`. Under the
+  previous SDK and Zod 3 they were converted through `zod-to-json-schema` at its
+  default target and advertised draft-07, which a client that validates tool
+  arguments against the advertised dialect is entitled to reject. A test asserts
+  the dialect on all 11 tools.
+- Rewrote the server instructions sent in the initialize result to describe the
+  partial-response contract instead of the old retry-on-error path.
+  `docs/PROMPTING.md` quotes the constant verbatim and a test enforces it, so
+  the documented contract and the wire contract cannot drift.
+
 ### Security and runtime hardening
 
 - Added one per-user broker so Codex, Claude, and other MCP adapters share one
@@ -101,6 +162,48 @@ add or refine capabilities, and patch versions are reserved for compatible fixes
   schedule context.
 - Ledger writes use fixed reason summaries and error classes instead of
   caller-controlled plaintext.
+- The idle sensor scopes its `ioreg` read to the `IOHIDSystem` entry (`-r -d 1`).
+  The unrestricted `ioreg -c IOHIDSystem` dump walks the whole registry, overran
+  the exec buffer on a normal Mac, and cost the sensor every sample, so presence
+  and input cadence were permanently absent.
+- The Bluetooth device sensor reads both `system_profiler SPBluetoothDataType`
+  shapes: the `device_connected` / `device_not_connected` grouping on Ventura and
+  later, and the flat `device_title` list with per-device `device_isconnected` on
+  Monterey and earlier.
+- The location sensor distinguishes the causes `networksetup` reports
+  identically. Wi-Fi off, a non-Wi-Fi interface, and an SSID withheld pending
+  Location Services now produce separate diagnostics and fix hints instead of one
+  indistinguishable absent-location result. The Wi-Fi power probe reads the exit
+  status as well as both streams, because `-getairportpower` prints to stdout and
+  then exits non-zero.
+- The active-window sensor withholds a raw window title outright when its own
+  classifier rates the title medium or high sensitivity, instead of emitting a
+  redacted one. Redaction strips emails, URLs and long digit runs, which helps
+  only when the sensitive part is a substring; in an email subject, a Messages
+  thread name or a Slack DM title the sensitive part is the whole title. Those
+  now report `title_withheld: "sensitivity"`.
+- The broker resolves the Sense entry point from its own module location rather
+  than `process.argv[1]`, which is only the Sense entry when Sense is invoked
+  directly and not under a launcher shim, a symlinked wrapper, or an embedding
+  host.
+- Broker socket establishment and the opening `ping` handshake have separate
+  bounded timeouts, so a wedged peer that accepts a connection and stays silent
+  no longer holds every adapter for a full request timeout before the
+  recover/elect path runs. Owner-record staleness checks tolerate wall-clock
+  drift rather than treating a live owner as pre-boot.
+- `doctor` resolves helper binaries the way `which` does, requiring a regular
+  file rather than only the execute bit, so a directory named `ffmpeg` on the
+  PATH is no longer reported as a working helper. It measures the PATH the
+  server will actually be started with instead of assuming its own, and warns
+  rather than passing when a helper resolves for `doctor` but would be invisible
+  to a server spawned by a GUI `.app` under launchd's stripped PATH. TCC checks
+  attribute a grant to the outermost `.app`, walking past non-grantable nested
+  helper bundles, and read screen-capture and camera authorization without ever
+  prompting or capturing.
+- The panel no longer writes a Codex `config.toml` for clients that never read
+  one; it returns the equivalent env-block instruction instead, and honours a
+  Codex-config `SENSE_SNAPSHOT_DIR` override when resolving the snapshot
+  directory.
 
 ## [0.1.0] - 2026-06-15
 

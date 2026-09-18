@@ -33,6 +33,7 @@ import { sensors } from "./sensors/index.js";
 import type { CapabilityOperationalState, Sensor } from "./types.js";
 import { atomicWritePrivateFile, removePrivateFile } from "./privateFiles.js";
 import { removePanelRuntime, writePanelRuntime } from "./panelRuntime.js";
+import { snapshotDirectory } from "./snapshotFiles.js";
 
 const DEFAULT_CODEX_CONFIG = path.join(os.homedir(), ".codex", "config.toml");
 const DEFAULT_PORT = 3777;
@@ -331,7 +332,8 @@ function captureOperationalStates(
 }
 
 function snapshotDir(env: Record<string, string | undefined>): string {
-  return env.SENSE_SNAPSHOT_DIR || path.join(os.tmpdir(), "sense-mcp", "snapshots");
+  // snapshotDirectory() reads process.env only, so honour the Codex-config override first.
+  return env.SENSE_SNAPSHOT_DIR ? path.resolve(env.SENSE_SNAPSHOT_DIR) : snapshotDirectory();
 }
 
 function percent(value: number): string {
@@ -1352,6 +1354,17 @@ async function readBoundedTextFile(file: string, maxBytes: number): Promise<stri
   }
 }
 
+/** Read an optional Codex config: clients other than Codex never create one. */
+async function readOptionalConfig(file: string, maxBytes: number): Promise<string> {
+  try {
+    return await readBoundedTextFile(file, maxBytes);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return "";
+    throw error;
+  }
+}
+
 export type PanelRuntimeLoader = () => Promise<ContextResult | undefined>;
 
 async function loadExistingBrokerRuntime(): Promise<ContextResult | undefined> {
@@ -1371,7 +1384,7 @@ async function loadPanelState(
   policyFile: string | undefined,
   runtimeLoader: PanelRuntimeLoader,
 ): Promise<PanelState> {
-  const toml = await readBoundedTextFile(configPath, MAX_CONFIG_BYTES);
+  const toml = await readOptionalConfig(configPath, MAX_CONFIG_BYTES);
   const env = { ...process.env, ...parseSenseEnvFromToml(toml) };
   const store = new SensePolicyStore(policyFile ?? env.SENSE_POLICY_PATH ?? policyPath(), env);
   const [snapshots, ledger, iphoneContext, policy, runtime] = await Promise.all([
@@ -1391,6 +1404,32 @@ function capabilityPolicyKey(capability: string): PolicyKey | undefined {
     : undefined;
 }
 
+function envUpdateInstruction(update: { key: string; value: string | null }): string {
+  return update.value === null
+    ? `Remove ${update.key} from the sense entry in your MCP client configuration, then restart the client.`
+    : `Set ${update.key}=${update.value} in the env block of the sense entry in your MCP client configuration, then restart the client.`;
+}
+
+/**
+ * Codex keeps this setting in config.toml. Other clients never create that file, and writing one
+ * would strand the value somewhere the client never reads, so hand back the env instruction instead.
+ */
+async function readWritableConfig(
+  configPath: string,
+  update: { key: string; value: string | null },
+): Promise<string> {
+  try {
+    return await readBoundedTextFile(configPath, MAX_CONFIG_BYTES);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+    throw new PanelHttpError(
+      409,
+      `No Codex config at ${configPath}. ${envUpdateInstruction(update)}`,
+    );
+  }
+}
+
 async function updatePermission(
   configPath: string,
   policyFile: string | undefined,
@@ -1406,7 +1445,7 @@ async function updatePermission(
       body.enabled,
       typeof body.value === "string" ? body.value : undefined,
     );
-    const current = await readBoundedTextFile(configPath, MAX_CONFIG_BYTES);
+    const current = await readWritableConfig(configPath, update);
     const updated = setSenseEnvInToml(current, update.key, update.value);
     if (Buffer.byteLength(updated) > MAX_CONFIG_BYTES) throw new Error("panel configuration is too large");
     await writeFile(configPath, updated);
@@ -1415,7 +1454,7 @@ async function updatePermission(
 
   const key = capabilityPolicyKey(body.capability);
   if (!key) throw new Error(`Unknown capability: ${body.capability}`);
-  const current = await readBoundedTextFile(configPath, MAX_CONFIG_BYTES);
+  const current = await readOptionalConfig(configPath, MAX_CONFIG_BYTES);
   const env = { ...process.env, ...parseSenseEnvFromToml(current) };
   await new SensePolicyStore(policyFile ?? env.SENSE_POLICY_PATH ?? policyPath(), env).update({
     [key]: body.enabled,

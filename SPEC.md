@@ -288,6 +288,100 @@ Local Calendar acquisition MUST be policy-gated and headless. The Sense
 implementation uses optional `icalBuddy` and MUST NOT activate or launch a GUI
 calendar application.
 
+## Context tool responses (normative)
+
+Every context tool returns machine-readable `structuredContent` alongside one
+short text line. The structured envelope is:
+
+| Field | Type | Description |
+|---|---|---|
+| `ok` | boolean | The call produced a usable response. |
+| `context_satisfied` | boolean | Every requested domain that had data is present in `context`. |
+| `projection` | string | The projection actually used, which MAY be leaner than the one requested. |
+| `budget` | object | `max_tokens`, `max_bytes`, `estimated_tokens`, `serialized_bytes`, `truncated`. |
+| `context` | object | The filtered ContextFrame. |
+| `health` | object | Provider status, source, and diagnostics. |
+| `refreshed_domains` | array | Domains the provider actually refreshed. |
+| `context_omitted` | object | Present only when `context_satisfied` is false. |
+| `error` | object | Present only when `ok` is false. |
+
+`get_relevant_context` returns the same envelope plus its routing fields, and
+reports its budgets as `context_budget` (the embedded frame) and `output_budget`
+(the complete response).
+
+### `max_tokens`
+
+`max_tokens` is a ceiling on the **complete** serialized response, not on the
+frame alone, and it is converted to an enforced byte ceiling at three serialized
+bytes per estimated token. Exact model tokenization differs, so the token number
+is an estimate and the byte ceiling is the enforced invariant.
+
+Implementations MUST publish a closed accepted range and MUST reject an input
+outside it at schema validation. The Sense implementation accepts **320 to
+8,192** on every context tool and on the router alike. The floor is the smallest
+budget that can still return a domain body rather than a bare envelope; the
+ceiling is what the server will ever suggest retrying at, so a suggestion is
+always a legal input.
+
+When `max_tokens` is omitted, the projection default applies:
+
+| projection | default `max_tokens` |
+| ---------- | -------------------- |
+| `compact`  | `1150`               |
+| `brief`    | `1500`               |
+| `focused`  | `2800`               |
+| `debug`    | `5600`               |
+| `diff`     | `800`                |
+
+`get_context_frame` and `get_domains` default to `focused`; the single-domain
+getters default to `brief`. `get_relevant_context` takes no projection and
+defaults to `2800`, because its ceiling has to cover the routing plan, the
+guidance, and the planned domains' context together.
+
+These defaults are ceilings, not costs. A larger default never inflates a
+response; it only stops one being truncated. Each is the measured cost of that
+projection's complete, untruncated output over a realistically full frame plus
+roughly 40% headroom, so a stock call still returns the projection's full shape
+after a sensor or a diagnostic is added.
+
+### Partial responses
+
+A response that fits its budget but had to leave requested domain data out is
+**not** an error. It returns `ok: true`, the context it could fit,
+`context_satisfied: false`, and a `context_omitted` block:
+
+```json
+{
+  "domains": ["screen", "user", "environment", "schedule"],
+  "reason": "Some of the requested screen, user, environment, schedule data did not fit the serialized output budget. Retry with max_tokens 1741 for the complete response.",
+  "suggested_max_tokens": 1741
+}
+```
+
+`suggested_max_tokens` is present only when that budget was measured to return
+the complete response. It is always larger than the budget the caller sent and
+never above the accepted ceiling, so a client MAY retry on it blindly.
+
+`context_satisfied: true` therefore means "every requested domain that has data
+is present", and it is measured against the frame the response was built from —
+it is not something a caller asserts and not something the server claims
+optimistically. Partial truthful context is useful to a model; a hard error on a
+context-enrichment tool is not.
+
+An implementation MUST return `ok: false` only when no response at all fits the
+requested budget. The Sense implementation uses the machine error code
+`context_budget_too_small` for exactly that case. `retryable` is true exactly
+when a budget within the accepted range was measured to work, and `fix_hint`
+then names it; when no budget in range works, `retryable` is false and the hint
+says to request fewer domains or a leaner projection instead. An error that is
+retryable in principle but not at any legal input is worse than no hint.
+
+### Tool order
+
+`get_relevant_context` SHOULD be listed first. Clients weight tool order, and
+the routing discipline the rest of this spec assumes only holds if the planning
+tool is the one a client reaches for before the raw getters.
+
 ## Relevance router
 
 Implementations MAY expose `get_relevant_context({ user_request })`. This tool
@@ -314,7 +408,7 @@ Example `context_plan`:
 ```json
 {
   "expected_value": "high",
-  "budget": { "mode": "focused", "max_tokens": 140 },
+  "budget": { "mode": "focused", "max_tokens": 3312 },
   "plan_only": false,
   "include_frame": true,
   "include_situation": true,
@@ -327,13 +421,62 @@ Example `context_plan`:
 
 `expected_value` is `none` | `low` | `medium` | `high`. Clients SHOULD treat
 `none` plus `plan_only: true` as an instruction to answer normally without
-pulling a ContextFrame. `context_plan.budget.max_tokens` describes routing
-intent. Context tool input `max_tokens` sets a hard complete-response byte
-ceiling at three serialized bytes per estimated token. Exact model tokenization
-can differ.
+pulling a ContextFrame. Context tool input `max_tokens` sets a hard
+complete-response byte ceiling at three serialized bytes per estimated token.
+Exact model tokenization can differ.
+
+`context_plan.budget.max_tokens` is advisory, and a client MAY echo it straight
+back as the `max_tokens` input of the call the plan recommends. It therefore
+MUST be a legal value for that input, and it MUST be large enough for that call
+to answer in full. Each mode is the default budget of the projection the
+recommended call uses, plus the routing envelope that call carries when it comes
+back through `get_relevant_context`, because `max_tokens` is a ceiling on the
+complete response and not on the frame alone:
+
+| mode      | recommended call                        | projection | advisory |
+| --------- | --------------------------------------- | ---------- | -------- |
+| `none`    | none; the plan is the whole answer      | n/a        | `0`      |
+| `visual`  | a snapshot tool, which takes no budget  | compact    | `1662`   |
+| `brief`   | a single-domain getter                  | brief      | `2012`   |
+| `focused` | `get_context_frame`                     | focused    | `3312`   |
+
+These numbers follow the implementation's projection defaults; an implementation
+with different defaults will publish different advisories. What is normative is
+the two properties: legal input, and sufficient for the recommended call. On a
+real four-domain frame the focused projection costs about 2200 estimated tokens
+and the routing envelope about 500, so an advisory equal to the projection
+default alone would push the router onto a smaller output candidate and silently
+drop guidance and privacy notes. Implementations SHOULD verify both properties
+against a captured real frame rather than a hand-written one: a minimal test
+frame is an order of magnitude smaller and hides the failure.
 
 Clients SHOULD use this before guessing whether camera, screen, schedule, or
 environment tools are appropriate.
+
+### Routing a request to a capture
+
+A capture is the one routing decision that cannot be taken back, so the router
+MUST NOT recommend `take_camera_snapshot`, `take_window_snapshot`,
+`take_full_screen_snapshot` or `take_screen_snapshot` unless the request is
+about something the user can see right now. A topic noun is not such a request.
+"lighting", "recording", "my desk" and "behind me" are the ordinary subject
+matter of general questions ("tips for lighting a video call", "how do I start
+recording in Zoom?", "what is a good desk height?"), and a router that keys on
+the noun alone answers them by turning on the camera. Two conditions are
+therefore required together:
+
+1. the sentence is about this user's own present situation — a first-person or
+   demonstrative reference, not a third-person or generic one; and
+2. the sentence asks what is there — an identification, inspection or
+   appearance question — rather than asking for advice, instructions or prose
+   about the same subject.
+
+A request that is a writing task ("draft a post about my desk setup") fails
+condition 2 whatever nouns it contains, and implementations SHOULD apply that
+gate to every branch that can reach a sensor through a bare noun, not only to
+the ones that capture. An implementation's corpus SHOULD assert this directly:
+the general-knowledge phrasing of each capture trigger belongs in the negative
+corpus, where reaching a capture tool fails the build.
 
 ## Access ledger
 
@@ -487,6 +630,12 @@ on read.
   (spec invariants, not data), separate `derived` wire block (flat format wins).
 - **0.2 broker addendum** — Added optional `situation`, `context_plan`, and a
   metadata-only local access ledger.
+- **0.2 response addendum** — Added the normative context tool response
+  envelope: a closed accepted `max_tokens` range (320–8,192, replacing the
+  earlier 96/160 floors and 4,096 ceiling), published projection defaults, the
+  `context_omitted` block, `context_satisfied` defined as "every requested
+  domain that has data is present", partial-not-error semantics, and
+  `get_relevant_context` first in tool order.
 - **0.2 hardening addendum** — Added shared broker lifecycle, field-level
   expiry, domain refresh, operational capability states, response byte
   ceilings, window-first capture, exact local media consent, and the

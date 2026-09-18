@@ -3,6 +3,31 @@
 Sense works best when the AI client uses the smallest useful tool and explains
 uncertainty plainly.
 
+## Server Instructions
+
+Sense sends this to the client in the initialize result, so a client that reads
+MCP instructions has the routing discipline before its first call. It is exported
+as `SENSE_SERVER_INSTRUCTIONS` from `src/instructions.ts`, and a test asserts this
+block matches that constant verbatim so the doc and the wire cannot drift.
+
+```text
+Sense is a local-first context broker for the user's current situation.
+Call get_relevant_context first: it classifies the request, returns the minimum
+context plan, and usually embeds the context you need in one call. When
+context_satisfied is true, every requested domain that has data is present, so do
+not call another Sense context getter for the same request. When
+context_plan.plan_only is true or expected_value is none, answer normally without
+requesting a ContextFrame. A short response is not a failure: ok stays true,
+context_satisfied goes false, and context_omitted names the domains left out and,
+as suggested_max_tokens, a budget that returns the whole response; retry on that
+number only when the omitted domains matter for this request. max_tokens accepts
+320 to 8192 and bounds the complete response; max_bytes is the enforced ceiling
+and estimated_tokens is an approximation. A missing field means unknown, not
+false, and inferred context is never certain fact. Snapshot tools are explicit
+one-shot captures that require local human consent immediately before capture;
+never use them for ordinary writing, planning, coding, or general personalization.
+```
+
 ## Client System Prompt Snippet
 
 ```text
@@ -14,8 +39,10 @@ without requesting a ContextFrame.
 Respect context_plan.budget.max_tokens: prefer the situation card and the
 smallest relevant domain over a full frame.
 When context_satisfied is true, do not call another Sense context getter for
-the same request. Treat the returned max_bytes as the enforced response ceiling
-and estimated_tokens as an approximation.
+the same request. When it is false, the response is partial rather than failed:
+read context_omitted, and only retry at its suggested_max_tokens if the omitted
+domains matter. Treat the returned max_bytes as the enforced response ceiling
+and estimated_tokens as an approximation; max_tokens accepts 320 to 8192.
 Use semantic context tools for timing, focus, environment, and current work.
 Use take_camera_snapshot only for a current user request about physical visual
 appearance, room, desk, objects, lighting, or outfit.

@@ -57,9 +57,18 @@ Context projections are `compact`, `brief`, `focused`, `debug`, and `diff`.
 Sense enforces a serialized byte ceiling for the complete structured response
 and reports both the byte ceiling and a conservative token estimate. The
 estimate is guidance because model tokenizers differ; the byte ceiling is the
-enforced invariant. Context inputs accept 96 to 4,096 estimated tokens; router
-inputs accept 160 to 4,096. The ceiling is three serialized bytes per estimated
-token.
+enforced invariant. Every context tool and the router accept the same closed
+range, 320 to 8,192 estimated tokens. The ceiling is three serialized bytes per
+estimated token.
+
+When a response fits its budget but could not carry every requested domain,
+Sense returns `ok: true` with the context it has, `context_satisfied: false`,
+and a `context_omitted` block naming the omitted domains and, when one exists
+within the accepted range, the `suggested_max_tokens` that returns the complete
+response. Only a budget that cannot carry any response at all is an error
+(`context_budget_too_small`). `context_satisfied` is measured against the frame
+the response was built from, not asserted by the caller: it means every
+requested domain that has data is present.
 
 Context requests choose `cached`, `if_stale`, or `force`. The broker refreshes
 only sensors declared for the requested domains and reports which domains it

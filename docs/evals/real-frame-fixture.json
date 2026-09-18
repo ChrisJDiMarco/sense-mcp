@@ -1,0 +1,587 @@
+{
+  "description": "A real-shaped ContextFrame captured from a live `get_context_frame` (projection debug, max_tokens 8192) on macOS, then sanitized: workspace, branch, window title and media app replaced with same-shaped placeholders, and the user and schedule domains filled in from the sensor field sets because calendar and presence are denied on the capture machine. Every capability is reported granted so the privacy and quality blocks are at their full size. Hand-written minimal frames are 10-20x smaller than this and hide every budget and truncation defect, so budget assertions must use this fixture.",
+  "captured_from": "get_context_frame projection=debug max_tokens=8192",
+  "frame": {
+    "spec": "context-frame/0.2",
+    "generated_at": "2026-06-15T16:32:21.255Z",
+    "staleness_ms": 37871,
+    "privacy": {
+      "tier": 3,
+      "capabilities": {
+        "screen_activity": "granted",
+        "presence": "granted",
+        "power": "granted",
+        "device_context": "granted",
+        "workspace_state": "granted",
+        "calendar": "granted",
+        "location_class": "granted",
+        "now_playing": "granted",
+        "ambient_light": "granted",
+        "microphone_level": "granted",
+        "focus_mode": "granted",
+        "camera_snapshot": "granted",
+        "health_context": "granted",
+        "weather": "granted",
+        "iphone_context": "granted",
+        "raw_window_titles": "granted",
+        "screen_snapshot": "granted",
+        "window_snapshot": "granted",
+        "full_screen_snapshot": "granted",
+        "camera_attention": "granted"
+      },
+      "capability_states": {
+        "screen_activity": "healthy",
+        "presence": "healthy",
+        "power": "healthy",
+        "device_context": "healthy",
+        "workspace_state": "healthy",
+        "calendar": "healthy",
+        "location_class": "healthy",
+        "now_playing": "healthy",
+        "ambient_light": "healthy",
+        "microphone_level": "healthy",
+        "focus_mode": "healthy",
+        "camera_snapshot": "healthy",
+        "health_context": "healthy",
+        "weather": "healthy",
+        "iphone_context": "healthy",
+        "raw_window_titles": "healthy",
+        "screen_snapshot": "healthy",
+        "window_snapshot": "healthy",
+        "full_screen_snapshot": "healthy",
+        "camera_attention": "healthy"
+      },
+      "capability_details": {
+        "calendar": {
+          "sensor": "calendar",
+          "state": "disabled",
+          "reason": "disabled_by_policy",
+          "detail": "Calendar timing is disabled in the Sense policy.",
+          "fix_hint": "Run sense-mcp enable calendar if coarse local schedule pressure is wanted."
+        },
+        "location_class": {
+          "sensor": "location",
+          "state": "disabled",
+          "reason": "disabled_by_policy",
+          "detail": "Wi-Fi location classification is disabled in the Sense policy.",
+          "fix_hint": "Run sense-mcp enable location to allow coarse local classification."
+        },
+        "ambient_light": {
+          "sensor": "ambient-light",
+          "state": "degraded",
+          "reason": "ambient_light_not_exposed",
+          "detail": "macOS did not expose an AppleLMUController ambient light value.",
+          "fix_hint": "Use daylight_class as the fallback; some Macs or display setups do not expose room brightness."
+        }
+      }
+    },
+    "assistive_posture": "assist_ready",
+    "quality": {
+      "overall_freshness": "aging",
+      "domains": {
+        "screen": {
+          "source_sensors": [
+            "workspace",
+            "active-window"
+          ],
+          "observation_count": 2,
+          "staleness_ms": 17800,
+          "freshness": "fresh"
+        },
+        "environment": {
+          "source_sensors": [
+            "battery",
+            "audio-level",
+            "media",
+            "time-context",
+            "devices"
+          ],
+          "observation_count": 5,
+          "staleness_ms": 37871,
+          "freshness": "aging"
+        },
+        "user": {
+          "source_sensors": [
+            "idle",
+            "focus-mode",
+            "health-bridge"
+          ],
+          "observation_count": 3,
+          "staleness_ms": 9100,
+          "freshness": "fresh"
+        },
+        "schedule": {
+          "source_sensors": [
+            "calendar",
+            "time-context"
+          ],
+          "observation_count": 2,
+          "staleness_ms": 41200,
+          "freshness": "aging"
+        }
+      },
+      "fields": {
+        "screen": {
+          "workspace_name": {
+            "source": "workspace",
+            "classification": "derived",
+            "observed_at": "2026-09-18T20:32:03.455Z",
+            "staleness_ms": 17800
+          },
+          "git_branch": {
+            "source": "workspace",
+            "classification": "observed",
+            "observed_at": "2026-09-18T20:32:03.455Z",
+            "staleness_ms": 17800
+          },
+          "git_dirty_count": {
+            "source": "workspace",
+            "classification": "observed",
+            "observed_at": "2026-09-18T20:32:03.455Z",
+            "staleness_ms": 17800
+          },
+          "git_has_uncommitted_changes": {
+            "source": "workspace",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:03.455Z",
+            "staleness_ms": 17800
+          },
+          "git_dirty_severity": {
+            "source": "workspace",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:03.455Z",
+            "staleness_ms": 17800
+          },
+          "project_type": {
+            "source": "workspace",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:03.455Z",
+            "staleness_ms": 17800
+          },
+          "has_test_script": {
+            "source": "workspace",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:03.455Z",
+            "staleness_ms": 17800
+          },
+          "has_build_script": {
+            "source": "workspace",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:03.455Z",
+            "staleness_ms": 17800
+          },
+          "has_dev_script": {
+            "source": "workspace",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:03.455Z",
+            "staleness_ms": 17800
+          },
+          "work_mode": {
+            "source": "workspace",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:03.455Z",
+            "staleness_ms": 17800
+          },
+          "active_app": {
+            "source": "active-window",
+            "classification": "observed",
+            "observed_at": "2026-09-18T20:32:17.426Z",
+            "staleness_ms": 3829
+          },
+          "activity_class": {
+            "source": "active-window",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:17.426Z",
+            "staleness_ms": 3829
+          },
+          "active_window_label": {
+            "source": "active-window",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:17.426Z",
+            "staleness_ms": 3829
+          },
+          "sensitivity_level": {
+            "source": "active-window",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:17.426Z",
+            "staleness_ms": 3829
+          },
+          "active_window_title": {
+            "source": "active-window",
+            "classification": "observed",
+            "observed_at": "2026-09-18T20:32:17.426Z",
+            "staleness_ms": 3829
+          }
+        },
+        "environment": {
+          "battery_percent": {
+            "source": "battery",
+            "classification": "observed",
+            "observed_at": "2026-09-18T20:31:43.384Z",
+            "staleness_ms": 37871
+          },
+          "power_source": {
+            "source": "battery",
+            "classification": "observed",
+            "observed_at": "2026-09-18T20:31:43.384Z",
+            "staleness_ms": 37871
+          },
+          "low_power": {
+            "source": "battery",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:31:43.384Z",
+            "staleness_ms": 37871
+          },
+          "noise_class": {
+            "source": "audio-level",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:01.457Z",
+            "staleness_ms": 19798
+          },
+          "microphone_level_db": {
+            "source": "audio-level",
+            "classification": "observed",
+            "observed_at": "2026-09-18T20:32:01.457Z",
+            "staleness_ms": 19798
+          },
+          "microphone_level_sample_ms": {
+            "source": "audio-level",
+            "classification": "observed",
+            "observed_at": "2026-09-18T20:32:01.457Z",
+            "staleness_ms": 19798
+          },
+          "media_app": {
+            "source": "media",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:08.462Z",
+            "staleness_ms": 12793
+          },
+          "media_playback": {
+            "source": "media",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:08.462Z",
+            "staleness_ms": 12793
+          },
+          "media_type": {
+            "source": "media",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:08.462Z",
+            "staleness_ms": 12793
+          },
+          "local_time": {
+            "source": "time-context",
+            "classification": "observed",
+            "observed_at": "2026-09-18T20:32:12.576Z",
+            "staleness_ms": 8679
+          },
+          "day_segment": {
+            "source": "time-context",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:12.576Z",
+            "staleness_ms": 8679
+          },
+          "daylight_class": {
+            "source": "time-context",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:12.576Z",
+            "staleness_ms": 8679
+          },
+          "is_workday": {
+            "source": "time-context",
+            "classification": "observed",
+            "observed_at": "2026-09-18T20:32:12.576Z",
+            "staleness_ms": 8679
+          },
+          "external_display_count": {
+            "source": "devices",
+            "classification": "observed",
+            "observed_at": "2026-09-18T20:32:17.198Z",
+            "staleness_ms": 4057
+          },
+          "multi_display": {
+            "source": "devices",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:17.198Z",
+            "staleness_ms": 4057
+          },
+          "airpods_connected": {
+            "source": "devices",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:17.198Z",
+            "staleness_ms": 4057
+          },
+          "bluetooth_input_connected": {
+            "source": "devices",
+            "classification": "classified",
+            "observed_at": "2026-09-18T20:32:17.198Z",
+            "staleness_ms": 4057
+          }
+        },
+        "user": {
+          "idle_seconds": {
+            "source": "idle",
+            "classification": "observed",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 9100
+          },
+          "presence": {
+            "source": "idle",
+            "classification": "classified",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 9100
+          },
+          "input_cadence": {
+            "source": "idle",
+            "classification": "classified",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 9100
+          },
+          "focus_mode": {
+            "source": "focus-mode",
+            "classification": "classified",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 9100
+          },
+          "do_not_disturb": {
+            "source": "focus-mode",
+            "classification": "classified",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 9100
+          },
+          "readiness_class": {
+            "source": "health-bridge",
+            "classification": "classified",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 240000
+          },
+          "recovery_class": {
+            "source": "health-bridge",
+            "classification": "classified",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 240000
+          },
+          "stress_class": {
+            "source": "health-bridge",
+            "classification": "classified",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 240000
+          },
+          "sleep_debt": {
+            "source": "health-bridge",
+            "classification": "classified",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 240000
+          },
+          "readiness_score": {
+            "source": "health-bridge",
+            "classification": "observed",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 240000
+          }
+        },
+        "schedule": {
+          "in_meeting": {
+            "source": "calendar",
+            "classification": "observed",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 41200
+          },
+          "next_event_minutes": {
+            "source": "calendar",
+            "classification": "observed",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 41200
+          },
+          "time_pressure": {
+            "source": "calendar",
+            "classification": "derived",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 41200
+          },
+          "usable_work_minutes": {
+            "source": "calendar",
+            "classification": "derived",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 41200
+          },
+          "work_window": {
+            "source": "calendar",
+            "classification": "classified",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 41200
+          },
+          "meeting_state": {
+            "source": "calendar",
+            "classification": "classified",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 41200
+          },
+          "prep_window": {
+            "source": "calendar",
+            "classification": "classified",
+            "observed_at": "2026-06-15T16:32:21.255Z",
+            "staleness_ms": 41200
+          }
+        }
+      },
+      "stability": {
+        "screen_activity": "stable"
+      }
+    },
+    "screen": {
+      "workspace_name": "atlas-core",
+      "git_branch": "feature-parser",
+      "git_dirty_count": 728,
+      "git_has_uncommitted_changes": true,
+      "git_dirty_severity": "heavy",
+      "project_type": "unknown",
+      "has_test_script": false,
+      "has_build_script": false,
+      "has_dev_script": false,
+      "work_mode": "implementation",
+      "active_app": "Google Chrome",
+      "activity_class": "browsing",
+      "active_window_label": "browser",
+      "sensitivity_level": "normal",
+      "active_window_title": "Quarterly Planning Draft - Team Workspace - Audio playing - Google Chrome - Profile 1"
+    },
+    "environment": {
+      "battery_percent": 100,
+      "power_source": "ac_power",
+      "low_power": false,
+      "noise_class": "moderate",
+      "microphone_level_db": -31,
+      "microphone_level_sample_ms": 1000,
+      "media_app": "Music Player",
+      "media_playback": "paused",
+      "media_type": "music",
+      "local_time": "16:32",
+      "day_segment": "afternoon",
+      "daylight_class": "daylight",
+      "is_workday": true,
+      "external_display_count": 2,
+      "multi_display": true,
+      "airpods_connected": false,
+      "bluetooth_input_connected": false
+    },
+    "situation": {
+      "summary": "User appears working in atlas-core, activity looks like browsing, with 728 changed items, plugged in, meeting in 45 minutes.",
+      "confidence": "medium",
+      "evidence": [
+        "workspace atlas-core",
+        "activity browsing",
+        "branch feature-parser",
+        "728 changed items",
+        "power ac_power",
+        "battery 100%",
+        "2 external displays",
+        "noise moderate",
+        "media paused",
+        "next event in 45 minutes"
+      ],
+      "unknowns": [
+        "location_class: disabled_by_policy",
+        "weather: unavailable"
+      ],
+      "risks": [
+        "workspace has a large amount of uncommitted local state",
+        "a meeting starts before a long work block would finish"
+      ],
+      "recommendations": [
+        "Use a direct calendar connector for account schedule timing when needed.",
+        "Treat focus mode as unknown unless a focus bridge is configured."
+      ],
+      "recent_changes": [
+        "Activity looks like browsing",
+        "2 external displays",
+        "Media paused",
+        "Workspace atlas-core active",
+        "Noise moderate"
+      ]
+    },
+    "user": {
+      "idle_seconds": 4,
+      "presence": "active",
+      "input_cadence": "steady",
+      "focus_mode": "deep_work",
+      "do_not_disturb": true,
+      "readiness_class": "moderate",
+      "recovery_class": "fair",
+      "stress_class": "elevated",
+      "sleep_debt": "mild",
+      "readiness_score": 61
+    },
+    "schedule": {
+      "in_meeting": false,
+      "next_event_minutes": 45,
+      "time_pressure": "moderate",
+      "usable_work_minutes": 42,
+      "work_window": "medium",
+      "meeting_state": "upcoming",
+      "prep_window": "soon"
+    }
+  },
+  "health": {
+    "status": "healthy",
+    "source": "broker",
+    "checked_at": "2026-06-15T16:32:21.255Z",
+    "diagnostics": [
+      {
+        "component": "calendar",
+        "status": "unavailable",
+        "message": "Calendar timing is disabled in the Sense policy.",
+        "latency_ms": 51,
+        "last_success_at": "2026-06-15T16:32:21.255Z"
+      },
+      {
+        "component": "location",
+        "status": "unavailable",
+        "message": "Wi-Fi location classification is disabled in the Sense policy.",
+        "latency_ms": 7,
+        "last_success_at": "2026-06-15T16:32:21.255Z"
+      },
+      {
+        "component": "ambient-light",
+        "status": "degraded",
+        "message": "macOS did not expose an AppleLMUController ambient light value.",
+        "last_success_at": "2026-06-15T16:32:21.255Z",
+        "latency_ms": 38
+      },
+      {
+        "component": "focus-mode",
+        "status": "unavailable",
+        "message": "unavailable; samples=0; availability_checks=3387",
+        "latency_ms": 0,
+        "last_success_at": "2026-06-15T16:32:21.255Z"
+      },
+      {
+        "component": "health-bridge",
+        "status": "unavailable",
+        "message": "unavailable; samples=0; availability_checks=1696",
+        "latency_ms": 0,
+        "last_success_at": "2026-06-15T16:32:21.255Z"
+      },
+      {
+        "component": "weather-bridge",
+        "status": "unavailable",
+        "message": "unavailable; samples=0; availability_checks=1693",
+        "latency_ms": 0,
+        "last_success_at": "2026-06-15T16:32:21.255Z"
+      },
+      {
+        "component": "iphone-context-bridge",
+        "status": "unavailable",
+        "message": "unavailable; samples=0; availability_checks=1699",
+        "latency_ms": 1,
+        "last_success_at": "2026-06-15T16:32:21.255Z"
+      },
+      {
+        "component": "mock",
+        "status": "unavailable",
+        "message": "unavailable; samples=0; availability_checks=20296",
+        "latency_ms": 0,
+        "last_success_at": "2026-06-15T16:32:21.255Z"
+      }
+    ]
+  }
+}

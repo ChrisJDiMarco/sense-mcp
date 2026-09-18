@@ -5,8 +5,8 @@ const path = require("node:path");
 
 async function main() {
   const [{ Client }, { StdioClientTransport }] = await Promise.all([
-    import("@modelcontextprotocol/sdk/client/index.js"),
-    import("@modelcontextprotocol/sdk/client/stdio.js"),
+    import("@modelcontextprotocol/client"),
+    import("@modelcontextprotocol/client/stdio"),
   ]);
   const server = path.join(__dirname, "..", "dist", "index.js");
   const env = Object.fromEntries(

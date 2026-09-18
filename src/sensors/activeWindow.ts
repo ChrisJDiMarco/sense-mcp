@@ -90,7 +90,18 @@ export function createActiveWindowSensor(
         sensitivity_level: sensitivity.level,
       };
       if (sensitivity.reason) fields.sensitivity_reason = sensitivity.reason;
-      if (rawTitles && title) fields.active_window_title = redactTitle(title);
+      if (rawTitles && title) {
+        // The classifier's own verdict gates the title, not just the policy.
+        // redactTitle only strips emails, URLs and long digit runs, so it can
+        // only help when the sensitive part is a *substring*. Above "normal"
+        // the sensitive part IS the whole title — an email subject line, a
+        // Messages thread name, a Slack DM title — and SPEC.md names exactly
+        // those three as things that must not cross. Nothing is left to strip,
+        // so medium and high are both withheld outright; only "normal" titles
+        // are redacted and emitted.
+        if (sensitivity.level === "normal") fields.active_window_title = redactTitle(title);
+        else fields.title_withheld = "sensitivity";
+      }
 
       return [
         {

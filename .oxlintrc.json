@@ -1,0 +1,76 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": ["dist", "coverage", "node_modules", "apps"],
+  "rules": {},
+  "overrides": [
+    {
+      "files": ["src/sensors/**/*.ts"],
+      "rules": {
+        "no-console": "error",
+        "no-restricted-globals": [
+          "error",
+          {
+            "name": "fetch",
+            "message": "Sensors must not make network calls (CONTRIBUTING.md, Sensor Contract rule 2)."
+          },
+          {
+            "name": "XMLHttpRequest",
+            "message": "Sensors must not make network calls (CONTRIBUTING.md, Sensor Contract rule 2)."
+          },
+          {
+            "name": "WebSocket",
+            "message": "Sensors must not make network calls (CONTRIBUTING.md, Sensor Contract rule 2)."
+          }
+        ],
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "node:http",
+                "message": "Sensors must not make network calls (CONTRIBUTING.md, Sensor Contract rule 2)."
+              },
+              {
+                "name": "node:https",
+                "message": "Sensors must not make network calls (CONTRIBUTING.md, Sensor Contract rule 2)."
+              },
+              {
+                "name": "node:net",
+                "message": "Sensors must not make network calls (CONTRIBUTING.md, Sensor Contract rule 2)."
+              },
+              {
+                "name": "node:dgram",
+                "message": "Sensors must not make network calls (CONTRIBUTING.md, Sensor Contract rule 2)."
+              },
+              {
+                "name": "node:tls",
+                "message": "Sensors must not make network calls (CONTRIBUTING.md, Sensor Contract rule 2)."
+              },
+              {
+                "name": "undici",
+                "message": "Sensors must not make network calls (CONTRIBUTING.md, Sensor Contract rule 2)."
+              },
+              {
+                "name": "node:fs",
+                "importNames": [
+                  "writeFile",
+                  "writeFileSync",
+                  "appendFile",
+                  "appendFileSync",
+                  "createWriteStream",
+                  "openSync"
+                ],
+                "message": "Sensors must not write raw sensor data to persistent storage (CONTRIBUTING.md, Sensor Contract rule 3). Persist through src/privateFiles.ts instead."
+              },
+              {
+                "name": "node:fs/promises",
+                "importNames": ["writeFile", "appendFile", "open"],
+                "message": "Sensors must not write raw sensor data to persistent storage (CONTRIBUTING.md, Sensor Contract rule 3). Persist through src/privateFiles.ts instead."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

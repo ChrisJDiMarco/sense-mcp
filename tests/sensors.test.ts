@@ -21,7 +21,7 @@ import {
   parseAvfoundationDevices,
   persistSnapshotBuffer,
 } from "../src/sensors/camera.js";
-import { parseDisplayCount, parseNearbyDevices } from "../src/sensors/devices.js";
+import { createDevicesSensor, parseDisplayCount, parseNearbyDevices } from "../src/sensors/devices.js";
 import { classifyLocation, createLocationSensor } from "../src/sensors/location.js";
 import { parseMediaState } from "../src/sensors/media.js";
 import {
@@ -31,7 +31,7 @@ import {
 } from "../src/sensors/screenSnapshot.js";
 import { parseWorkspaceStatus } from "../src/sensors/workspace.js";
 import { run } from "../src/sensors/exec.js";
-import { parseIdleSeconds } from "../src/sensors/idle.js";
+import { createIdleSensor, parseIdleSeconds } from "../src/sensors/idle.js";
 import { createActiveWindowSensor } from "../src/sensors/activeWindow.js";
 import { focusModeSensor } from "../src/sensors/focusMode.js";
 import { mockSensor } from "../src/sensors/mock.js";
@@ -128,7 +128,7 @@ describe("active-window acquisition policy", () => {
     const runCommand = vi
       .fn<typeof import("../src/sensors/exec.js").run>()
       .mockResolvedValueOnce("Code")
-      .mockResolvedValueOnce("Secret Project - chris@example.com");
+      .mockResolvedValueOnce("sense-mcp — frame.ts — user@example.com");
     const sensor = createActiveWindowSensor({
       isMac: true,
       runCommand,
@@ -138,7 +138,111 @@ describe("active-window acquisition policy", () => {
     const observations = await sensor.sample();
 
     expect(runCommand).toHaveBeenCalledTimes(2);
-    expect(observations[0].fields.active_window_title).not.toContain("chris@example.com");
+    expect(observations[0].fields.sensitivity_level).toBe("normal");
+    expect(observations[0].fields.active_window_title).toBe("sense-mcp — frame.ts — [email]");
+    expect(observations[0].fields.title_withheld).toBeUndefined();
+  });
+
+  test("withholds a title its own classifier rated high-sensitivity", async () => {
+    const highSensitivityTitles = [
+      "1Password — Chase Bank",
+      "Epic — Patient Chart — J. Smith",
+      ".env — SENSE_API_KEY",
+    ];
+
+    for (const title of highSensitivityTitles) {
+      const runCommand = vi
+        .fn<typeof import("../src/sensors/exec.js").run>()
+        .mockResolvedValueOnce("Code")
+        .mockResolvedValueOnce(title);
+      const sensor = createActiveWindowSensor({
+        isMac: true,
+        runCommand,
+        rawTitlesEnabled: async () => true,
+      });
+
+      const observations = await sensor.sample();
+
+      expect(observations[0].fields.sensitivity_level).toBe("high");
+      expect(observations[0].fields.active_window_title).toBeUndefined();
+      expect(observations[0].fields.title_withheld).toBe("sensitivity");
+      expect(JSON.stringify(observations[0].fields)).not.toContain(title);
+    }
+  });
+
+  /**
+   * SPEC.md:215-219 names email subjects and message-thread names as things a
+   * raw title must not carry. Those rate *medium*, not high, and redactTitle
+   * strips only emails, URLs and 6+ digit runs — so on a medium title there is
+   * no substring to strip and the payload crossed intact.
+   *
+   * Shapes below mirror titles captured live on this machine via the sensor's
+   * own TITLE_SCRIPT (names replaced): Messages' front window is a bare thread
+   * name, Slack's is "<Person> (DM) - <Workspace> - Slack". Mail was not
+   * running, so its subject-line shape is the one case not live-captured.
+   */
+  test("withholds a title its own classifier rated medium-sensitivity", async () => {
+    const mediumSensitivityTitles: Array<{ app: string; title: string }> = [
+      { app: "Mail", title: "Re: Q3 payroll adjustments — final numbers" },
+      { app: "Messages", title: "Weekend Crew" },
+      { app: "Slack", title: "Dana Kim (DM) - Northwind - Slack" },
+    ];
+
+    for (const { app, title } of mediumSensitivityTitles) {
+      const runCommand = vi
+        .fn<typeof import("../src/sensors/exec.js").run>()
+        .mockResolvedValueOnce(app)
+        .mockResolvedValueOnce(title);
+      const sensor = createActiveWindowSensor({
+        isMac: true,
+        runCommand,
+        rawTitlesEnabled: async () => true,
+      });
+
+      const observations = await sensor.sample();
+
+      expect(observations[0].fields.sensitivity_level).toBe("medium");
+      expect(observations[0].fields.active_window_title).toBeUndefined();
+      expect(observations[0].fields.title_withheld).toBe("sensitivity");
+      expect(JSON.stringify(observations[0].fields)).not.toContain(title);
+    }
+  });
+});
+
+describe("idle sensor acquisition", () => {
+  test("bounds the IOHIDSystem dump so presence cannot be lost to the exec buffer", async () => {
+    const runCommand = vi
+      .fn<typeof import("../src/sensors/exec.js").run>()
+      .mockResolvedValue('"HIDIdleTime" = 2500000000');
+    const sensor = createIdleSensor({ isMac: true, runCommand });
+
+    const observations = await sensor.sample();
+
+    expect(runCommand.mock.calls[0]?.[1]).toEqual(["-r", "-c", "IOHIDSystem", "-d", "1"]);
+    expect(observations[0].fields.presence).toBe("active");
+    expect(sensor.diagnose?.()).toBeNull();
+  });
+
+  test("reports a diagnostic instead of looking healthy when ioreg yields nothing", async () => {
+    const sensor = createIdleSensor({
+      isMac: true,
+      runCommand: vi.fn<typeof import("../src/sensors/exec.js").run>().mockResolvedValue(null),
+    });
+
+    await expect(sensor.sample()).resolves.toEqual([]);
+    expect(sensor.diagnose?.()?.reason).toBe("idle_signal_unavailable");
+  });
+
+  test("reports a diagnostic when IOHIDSystem carries no HIDIdleTime", async () => {
+    const sensor = createIdleSensor({
+      isMac: true,
+      runCommand: vi
+        .fn<typeof import("../src/sensors/exec.js").run>()
+        .mockResolvedValue('+-o IOHIDSystem  <class IOHIDSystem>\n  "IOClass" = "IOHIDSystem"'),
+    });
+
+    await expect(sensor.sample()).resolves.toEqual([]);
+    expect(sensor.diagnose?.()?.reason).toBe("idle_parse_failed");
   });
 });
 
@@ -1105,13 +1209,677 @@ describe("screen snapshot persistence", () => {
   });
 });
 
+/**
+ * Captured verbatim from `system_profiler SPDisplaysDataType` on an Apple
+ * silicon laptop with one internal display and no external displays. The
+ * "Graphics/Displays:" and GPU-name headers are what real output always
+ * carries, and what the old line-counting parser mistook for displays.
+ */
+const REAL_DISPLAY_TEXT = `Graphics/Displays:
+
+    Apple M3 Max:
+
+      Chipset Model: Apple M3 Max
+      Type: GPU
+      Bus: Built-In
+      Total Number of Cores: 40
+      Vendor: Apple (0x106b)
+      Metal Support: Metal 4
+      Displays:
+        Color LCD:
+          Display Type: Built-in Liquid Retina XDR Display
+          Resolution: 3456 x 2234 Retina
+          Main Display: Yes
+          Mirror: Off
+          Online: Yes
+          Automatically Adjust Brightness: No
+          Connection Type: Internal
+`;
+
+/** The same machine, via `system_profiler -json SPDisplaysDataType`. */
+const REAL_DISPLAY_JSON = JSON.stringify({
+  SPDisplaysDataType: [
+    {
+      _name: "Apple M3 Max",
+      spdisplays_ndrvs: [
+        {
+          _name: "Color LCD",
+          spdisplays_connection_type: "spdisplays_internal",
+          spdisplays_display_type: "spdisplays_built-in-liquid-retina-xdr",
+          spdisplays_main: "spdisplays_yes",
+        },
+      ],
+      sppci_device_type: "spdisplays_gpu",
+    },
+  ],
+});
+
+const DISPLAY_JSON_WITH_EXTERNAL = JSON.stringify({
+  SPDisplaysDataType: [
+    {
+      _name: "Apple M3 Max",
+      spdisplays_ndrvs: [
+        { _name: "Color LCD", spdisplays_connection_type: "spdisplays_internal" },
+        { _name: "Studio Display", spdisplays_connection_type: "spdisplays_displayport_dongle" },
+      ],
+    },
+  ],
+});
+
+/**
+ * (c) Structurally valid, and silent about displays: the key parses to an array, but nothing in it
+ * ever lists a display. That is not the same fact as "no external displays are attached".
+ */
+const DISPLAY_JSON_NO_ADAPTERS = JSON.stringify({ SPDisplaysDataType: [] });
+const DISPLAY_JSON_ADAPTER_WITHOUT_DISPLAY_LIST = JSON.stringify({
+  SPDisplaysDataType: [{ _name: "Apple M3 Max", sppci_device_type: "spdisplays_gpu" }],
+});
+/** A GPU that really does list its displays and has none attached — a genuine zero. */
+const DISPLAY_JSON_EMPTY_DISPLAY_LIST = JSON.stringify({
+  SPDisplaysDataType: [{ _name: "Apple M3 Max", spdisplays_ndrvs: [] }],
+});
+
+/**
+ * Modern `system_profiler SPBluetoothDataType` text: devices are grouped under
+ * "Connected:" / "Not Connected:" section headers. macOS no longer emits the
+ * per-device "Connected: Yes" line the old parser looked for.
+ */
+const BLUETOOTH_TEXT_WITH_CONNECTED = `Bluetooth:
+
+      Bluetooth Controller:
+          State: On
+      Connected:
+          Example AirPods Pro:
+              Address: 00:00:00:00:00:00
+              Minor Type: Headphones
+          Magic Keyboard with Numeric Keypad:
+              Address: 00:00:00:00:00:00
+              Minor Type: Keyboard
+      Not Connected:
+          Example Soundbar:
+              Address: 00:00:00:00:00:00
+              Minor Type: Speaker
+`;
+
+/**
+ * Captured on this Mac from `system_profiler -json SPBluetoothDataType` with AirPods Pro genuinely
+ * connected, so the `device_connected` true path is exercised against a payload macOS really
+ * emitted — nested single-key objects, the full per-device attribute set, and a sibling
+ * `device_not_connected` group alongside it. The previous true-path fixture for this branch was
+ * hand-written from the shape of the false-path one, which is how a fixture ends up agreeing with
+ * a parser instead of testing it.
+ *
+ * Sanitized for a public repository: Bluetooth addresses are zeroed, serial numbers masked, and
+ * the owner's personal device names ("<first name>'s iPad", a soundbar's brand and model) replaced
+ * with "Example ..." equivalents. All of those identify the machine or its owner and none of them
+ * is read by the parser — except the device *name*, whose only load-bearing property is whether it
+ * matches /AirPods/i or the input-device pattern, which the replacements preserve. Every other
+ * value is verbatim.
+ */
+const REAL_BLUETOOTH_JSON_AIRPODS_CONNECTED = JSON.stringify({
+  "SPBluetoothDataType": [
+    {
+      "controller_properties": {
+        "controller_address": "00:00:00:00:00:00",
+        "controller_chipset": "BCM_4388",
+        "controller_discoverable": "attrib_off",
+        "controller_firmwareVersion": "24.1.584.4713",
+        "controller_productID": "0x4A2F",
+        "controller_state": "attrib_on",
+        "controller_supportedServices": "0x1390039 < HFP AVRCP A2DP HID LEA AACP GATT SerialPort SCO >",
+        "controller_transport": "PCIe",
+        "controller_vendorID": "0x004C (Apple)"
+      },
+      "device_connected": [
+        {
+          "AirPods Pro": {
+            "device_address": "00:00:00:00:00:00",
+            "device_batteryLevelCase": "80%",
+            "device_batteryLevelLeft": "100%",
+            "device_batteryLevelRight": "100%",
+            "device_caseVersion": "9A348",
+            "device_firmwareVersion": "9A348",
+            "device_minorType": "Headphones",
+            "device_productID": "0x2014",
+            "device_rssi": "-67",
+            "device_serialNumber": "XXXXXXXXXXXX",
+            "device_serialNumberLeft": "XXXXXXXXXXXX",
+            "device_serialNumberRight": "XXXXXXXXXXXX",
+            "device_services": "0x980019 < HFP AVRCP A2DP AACP GATT ACL >",
+            "device_vendorID": "0x004C"
+          }
+        }
+      ],
+      "device_not_connected": [
+        {
+          "[Example] Soundbar": {
+            "device_address": "00:00:00:00:00:00",
+            "device_minorType": "Speaker"
+          }
+        },
+        {
+          "Example iPad": {
+            "device_address": "00:00:00:00:00:00",
+            "device_rssi": "-46"
+          }
+        },
+        {
+          "Example AirPods": {
+            "device_address": "00:00:00:00:00:00",
+            "device_caseVersion": "1.208.8",
+            "device_firmwareVersion": "6A326",
+            "device_minorType": "Headphones",
+            "device_productID": "0x2013",
+            "device_serialNumber": "XXXXXXXXXXXX",
+            "device_serialNumberLeft": "XXXXXXXXXXXX",
+            "device_serialNumberRight": "XXXXXXXXXXXX",
+            "device_vendorID": "0x004C"
+          }
+        },
+        {
+          "Magic Keyboard with Numeric Keypad": {
+            "device_address": "00:00:00:00:00:00",
+            "device_firmwareVersion": "2.0.6",
+            "device_minorType": "Keyboard",
+            "device_productID": "0x026C",
+            "device_vendorID": "0x004C"
+          }
+        }
+      ]
+    }
+  ]
+});
+
+/**
+ * The same real capture with one change: the "Magic Keyboard with Numeric Keypad" entry — itself
+ * captured verbatim from this Mac's `device_not_connected` group — moved into `device_connected`.
+ *
+ * That one move is synthetic and is called out here because it could not be captured live: the
+ * keyboard is paired but powered off, and driving a Bluetooth connection needs a helper this
+ * machine does not have. Everything about the entry (its attribute set, its `device_minorType`,
+ * its nesting) is real; only which group it sits in was edited, and that is exactly the field
+ * `parseNearbyDevices` keys off.
+ */
+const REAL_BLUETOOTH_JSON_INPUT_CONNECTED = JSON.stringify({
+  "SPBluetoothDataType": [
+    {
+      "controller_properties": {
+        "controller_address": "00:00:00:00:00:00",
+        "controller_chipset": "BCM_4388",
+        "controller_discoverable": "attrib_off",
+        "controller_firmwareVersion": "24.1.584.4713",
+        "controller_productID": "0x4A2F",
+        "controller_state": "attrib_on",
+        "controller_supportedServices": "0x1390039 < HFP AVRCP A2DP HID LEA AACP GATT SerialPort SCO >",
+        "controller_transport": "PCIe",
+        "controller_vendorID": "0x004C (Apple)"
+      },
+      "device_connected": [
+        {
+          "AirPods Pro": {
+            "device_address": "00:00:00:00:00:00",
+            "device_batteryLevelCase": "80%",
+            "device_batteryLevelLeft": "100%",
+            "device_batteryLevelRight": "100%",
+            "device_caseVersion": "9A348",
+            "device_firmwareVersion": "9A348",
+            "device_minorType": "Headphones",
+            "device_productID": "0x2014",
+            "device_rssi": "-67",
+            "device_serialNumber": "XXXXXXXXXXXX",
+            "device_serialNumberLeft": "XXXXXXXXXXXX",
+            "device_serialNumberRight": "XXXXXXXXXXXX",
+            "device_services": "0x980019 < HFP AVRCP A2DP AACP GATT ACL >",
+            "device_vendorID": "0x004C"
+          }
+        },
+        {
+          "Magic Keyboard with Numeric Keypad": {
+            "device_address": "00:00:00:00:00:00",
+            "device_firmwareVersion": "2.0.6",
+            "device_minorType": "Keyboard",
+            "device_productID": "0x026C",
+            "device_vendorID": "0x004C"
+          }
+        }
+      ],
+      "device_not_connected": [
+        {
+          "[Example] Soundbar": {
+            "device_address": "00:00:00:00:00:00",
+            "device_minorType": "Speaker"
+          }
+        },
+        {
+          "Example iPad": {
+            "device_address": "00:00:00:00:00:00",
+            "device_rssi": "-46"
+          }
+        },
+        {
+          "Example AirPods": {
+            "device_address": "00:00:00:00:00:00",
+            "device_caseVersion": "1.208.8",
+            "device_firmwareVersion": "6A326",
+            "device_minorType": "Headphones",
+            "device_productID": "0x2013",
+            "device_serialNumber": "XXXXXXXXXXXX",
+            "device_serialNumberLeft": "XXXXXXXXXXXX",
+            "device_serialNumberRight": "XXXXXXXXXXXX",
+            "device_vendorID": "0x004C"
+          }
+        }
+      ]
+    }
+  ]
+});
+
+/**
+ * The same real capture with the `device_connected` group removed, which is what macOS emits when
+ * nothing is connected: the key is absent entirely rather than present and empty. Identifiers are
+ * zeroed as above.
+ */
+const REAL_BLUETOOTH_JSON_NONE_CONNECTED = JSON.stringify({
+  "SPBluetoothDataType": [
+    {
+      "controller_properties": {
+        "controller_address": "00:00:00:00:00:00",
+        "controller_chipset": "BCM_4388",
+        "controller_discoverable": "attrib_off",
+        "controller_firmwareVersion": "24.1.584.4713",
+        "controller_productID": "0x4A2F",
+        "controller_state": "attrib_on",
+        "controller_supportedServices": "0x1390039 < HFP AVRCP A2DP HID LEA AACP GATT SerialPort SCO >",
+        "controller_transport": "PCIe",
+        "controller_vendorID": "0x004C (Apple)"
+      },
+      "device_not_connected": [
+        {
+          "[Example] Soundbar": {
+            "device_address": "00:00:00:00:00:00",
+            "device_minorType": "Speaker"
+          }
+        },
+        {
+          "Example iPad": {
+            "device_address": "00:00:00:00:00:00",
+            "device_rssi": "-46"
+          }
+        },
+        {
+          "Example AirPods": {
+            "device_address": "00:00:00:00:00:00",
+            "device_caseVersion": "1.208.8",
+            "device_firmwareVersion": "6A326",
+            "device_minorType": "Headphones",
+            "device_productID": "0x2013",
+            "device_serialNumber": "XXXXXXXXXXXX",
+            "device_serialNumberLeft": "XXXXXXXXXXXX",
+            "device_serialNumberRight": "XXXXXXXXXXXX",
+            "device_vendorID": "0x004C"
+          }
+        },
+        {
+          "Magic Keyboard with Numeric Keypad": {
+            "device_address": "00:00:00:00:00:00",
+            "device_firmwareVersion": "2.0.6",
+            "device_minorType": "Keyboard",
+            "device_productID": "0x026C",
+            "device_vendorID": "0x004C"
+          }
+        }
+      ]
+    }
+  ]
+});
+
+/**
+ * (b) The pre-Ventura `-json SPBluetoothDataType` shape: one flat `device_title` list, with the
+ * connection state carried per device as `device_isconnected` rather than by which group the
+ * device sits in. Modelled on that macOS generation's output — this machine runs a newer one and
+ * cannot emit it — with the same nested single-key-object structure and the same device names,
+ * device kinds and attribute spellings the modern capture above uses, so the only thing that
+ * differs between the two fixtures is the shape under test. Identifiers are synthetic throughout.
+ *
+ * Read with the modern keys alone, this payload yields two confident `false` fields and no
+ * diagnostic: AirPods that are genuinely connected reported as disconnected, silently.
+ */
+function legacyBluetoothJson(connected: { airpods: boolean; keyboard: boolean }): string {
+  const flag = (on: boolean) => (on ? "attrib_Yes" : "attrib_No");
+  return JSON.stringify({
+    "SPBluetoothDataType": [
+      {
+        "local_device_title": {
+          "general_address": "00:00:00:00:00:00",
+          "general_name": "Example MacBook Pro",
+          "general_powerState": "attrib_on",
+        },
+        "device_title": [
+          {
+            "AirPods Pro": {
+              "device_addr": "00:00:00:00:00:00",
+              "device_isconnected": flag(connected.airpods),
+              "device_minorType": "Headphones",
+              "device_services": "0x980019",
+            },
+          },
+          {
+            "Magic Keyboard with Numeric Keypad": {
+              "device_addr": "00:00:00:00:00:00",
+              "device_isconnected": flag(connected.keyboard),
+              "device_minorType": "Keyboard",
+            },
+          },
+          {
+            "[Example] Soundbar": {
+              "device_addr": "00:00:00:00:00:00",
+              "device_isconnected": "attrib_No",
+              "device_minorType": "Speaker",
+            },
+          },
+        ],
+      },
+    ],
+  });
+}
+
+const LEGACY_BLUETOOTH_JSON_AIRPODS_CONNECTED = legacyBluetoothJson({
+  airpods: true,
+  keyboard: false,
+});
+/** The keyboard connected too, so the two fields are shown moving independently. */
+const LEGACY_BLUETOOTH_JSON_INPUT_CONNECTED = legacyBluetoothJson({
+  airpods: true,
+  keyboard: true,
+});
+/** Nothing connected: a real, earned false rather than a false from an unread shape. */
+const LEGACY_BLUETOOTH_JSON_NONE_CONNECTED = legacyBluetoothJson({
+  airpods: false,
+  keyboard: false,
+});
+
+/**
+ * (b) Parses as JSON, has the expected top-level key, and carries no device list either shape
+ * knows — a stand-in for whatever macOS renames these keys to next. There is no true answer to
+ * read out of it, so the only honest output is none.
+ */
+const BLUETOOTH_JSON_UNRECOGNIZED_SHAPE = JSON.stringify({
+  "SPBluetoothDataType": [
+    {
+      "controller_properties": {
+        "controller_address": "00:00:00:00:00:00",
+        "controller_state": "attrib_on",
+      },
+      "devices_by_connection_state": [{ "AirPods Pro": { "device_minorType": "Headphones" } }],
+    },
+  ],
+});
+
+/** Stands in for system_profiler: text by default, JSON when asked for it. */
+function fakeSystemProfiler(responses: {
+  displayText: string;
+  displayJson: string;
+  bluetoothText: string;
+  bluetoothJson: string;
+}): typeof import("../src/sensors/exec.js").run {
+  return async (command, args) => {
+    if (command !== "system_profiler") return null;
+    const json = args.includes("-json");
+    if (args.includes("SPDisplaysDataType")) {
+      return json ? responses.displayJson : responses.displayText;
+    }
+    if (args.includes("SPBluetoothDataType")) {
+      return json ? responses.bluetoothJson : responses.bluetoothText;
+    }
+    return null;
+  };
+}
+
 describe("device context parsing", () => {
-  test("counts external displays and classifies nearby devices", () => {
-    expect(parseDisplayCount("Displays:\n Color LCD:\n Studio Display:\n")).toBe(1);
-    expect(parseNearbyDevices("AirPods Pro:\n Connected: Yes\n Magic Trackpad:\n Connected: Yes")).toEqual({
+  test("counts only non-internal displays", () => {
+    expect(parseDisplayCount(REAL_DISPLAY_JSON)).toBe(0);
+    expect(parseDisplayCount(DISPLAY_JSON_WITH_EXTERNAL)).toBe(1);
+  });
+
+  test("omits rather than guesses a display count it cannot parse", () => {
+    expect(parseDisplayCount(REAL_DISPLAY_TEXT)).toBeNull();
+    expect(parseDisplayCount("")).toBeNull();
+    expect(parseDisplayCount('{"SPDisplaysDataType": "nope"}')).toBeNull();
+  });
+
+  /**
+   * (c) "No external displays" and "this payload never mentioned displays" are different facts,
+   * and only the first one is a zero. Returning 0 for the second put a number the payload never
+   * supported in front of the model, and left multi_display false on a machine nothing was
+   * measured about.
+   */
+  test("separates no external displays from a payload that never said", () => {
+    // Never said: no adapters at all, or adapters that carry no display list.
+    expect(parseDisplayCount(DISPLAY_JSON_NO_ADAPTERS)).toBeNull();
+    expect(parseDisplayCount(DISPLAY_JSON_ADAPTER_WITHOUT_DISPLAY_LIST)).toBeNull();
+
+    // Said zero: a display list that is present and empty, and this Mac's real internal-only list.
+    expect(parseDisplayCount(DISPLAY_JSON_EMPTY_DISPLAY_LIST)).toBe(0);
+    expect(parseDisplayCount(REAL_DISPLAY_JSON)).toBe(0);
+  });
+
+  test("reports a diagnostic rather than zero displays for a payload that never said", async () => {
+    const sensor = createDevicesSensor({
+      isMac: true,
+      runCommand: fakeSystemProfiler({
+        displayText: REAL_DISPLAY_TEXT,
+        displayJson: DISPLAY_JSON_NO_ADAPTERS,
+        bluetoothText: BLUETOOTH_TEXT_WITH_CONNECTED,
+        bluetoothJson: REAL_BLUETOOTH_JSON_NONE_CONNECTED,
+      }),
+    });
+
+    const [observation] = await sensor.sample();
+
+    expect(observation.fields.external_display_count).toBeUndefined();
+    expect(observation.fields.multi_display).toBeUndefined();
+    expect(sensor.diagnose?.()?.reason).toBe("device_profile_parse_failed");
+  });
+
+  test("reads connected Bluetooth devices from the grouped modern payload", () => {
+    // Real capture, AirPods Pro connected and no input device connected: the two fields must move
+    // independently, which a fixture with both connected at once cannot show.
+    expect(parseNearbyDevices(REAL_BLUETOOTH_JSON_AIRPODS_CONNECTED)).toEqual({
+      airpods_connected: true,
+      bluetooth_input_connected: false,
+    });
+    expect(parseNearbyDevices(REAL_BLUETOOTH_JSON_INPUT_CONNECTED)).toEqual({
       airpods_connected: true,
       bluetooth_input_connected: true,
     });
+    expect(parseNearbyDevices(REAL_BLUETOOTH_JSON_NONE_CONNECTED)).toEqual({
+      airpods_connected: false,
+      bluetooth_input_connected: false,
+    });
+  });
+
+  /**
+   * (b) The pre-Ventura payload puts the connection state on each device instead of grouping by
+   * it. Reading only `device_connected` found no such key, fell through to the defaults, and
+   * returned two confident `false` fields with diagnose() still null — connected AirPods reported
+   * as absent, with nothing anywhere saying the payload had not been read.
+   */
+  test("reads connected Bluetooth devices from the legacy flat payload", () => {
+    expect(parseNearbyDevices(LEGACY_BLUETOOTH_JSON_AIRPODS_CONNECTED)).toEqual({
+      airpods_connected: true,
+      bluetooth_input_connected: false,
+    });
+    expect(parseNearbyDevices(LEGACY_BLUETOOTH_JSON_INPUT_CONNECTED)).toEqual({
+      airpods_connected: true,
+      bluetooth_input_connected: true,
+    });
+    // Present but flagged not-connected is a real false, not a fallthrough one.
+    expect(parseNearbyDevices(LEGACY_BLUETOOTH_JSON_NONE_CONNECTED)).toEqual({
+      airpods_connected: false,
+      bluetooth_input_connected: false,
+    });
+  });
+
+  test("omits rather than guesses Bluetooth state it cannot parse", () => {
+    expect(parseNearbyDevices(BLUETOOTH_TEXT_WITH_CONNECTED)).toBeNull();
+    expect(parseNearbyDevices("")).toBeNull();
+  });
+
+  /**
+   * (b) A shape neither branch recognises must not fall through to false either. This is the case
+   * that makes the recognition explicit rather than relying on "the modern keys were missing, so
+   * presumably nothing is connected".
+   */
+  test("omits Bluetooth state for a shape neither branch recognises", () => {
+    expect(parseNearbyDevices(BLUETOOTH_JSON_UNRECOGNIZED_SHAPE)).toBeNull();
+    expect(parseNearbyDevices('{"SPBluetoothDataType": [{}]}')).toBeNull();
+  });
+});
+
+describe("device context acquisition", () => {
+  test("does not invent external displays on an Apple silicon machine with none", async () => {
+    const sensor = createDevicesSensor({
+      isMac: true,
+      runCommand: fakeSystemProfiler({
+        displayText: REAL_DISPLAY_TEXT,
+        displayJson: REAL_DISPLAY_JSON,
+        bluetoothText: BLUETOOTH_TEXT_WITH_CONNECTED,
+        bluetoothJson: REAL_BLUETOOTH_JSON_NONE_CONNECTED,
+      }),
+    });
+
+    const [observation] = await sensor.sample();
+
+    expect(observation.fields.external_display_count).toBe(0);
+    expect(observation.fields.multi_display).toBe(false);
+    expect(sensor.diagnose?.()).toBeNull();
+  });
+
+  test("sees Bluetooth devices macOS groups under a Connected section", async () => {
+    const sensor = createDevicesSensor({
+      isMac: true,
+      runCommand: fakeSystemProfiler({
+        displayText: REAL_DISPLAY_TEXT,
+        displayJson: DISPLAY_JSON_WITH_EXTERNAL,
+        bluetoothText: BLUETOOTH_TEXT_WITH_CONNECTED,
+        bluetoothJson: REAL_BLUETOOTH_JSON_INPUT_CONNECTED,
+      }),
+    });
+
+    const [observation] = await sensor.sample();
+
+    expect(observation.fields.external_display_count).toBe(1);
+    expect(observation.fields.airpods_connected).toBe(true);
+    expect(observation.fields.bluetooth_input_connected).toBe(true);
+  });
+
+  test("sees connected devices on a Mac emitting the legacy Bluetooth payload", async () => {
+    const sensor = createDevicesSensor({
+      isMac: true,
+      runCommand: fakeSystemProfiler({
+        displayText: REAL_DISPLAY_TEXT,
+        displayJson: REAL_DISPLAY_JSON,
+        bluetoothText: BLUETOOTH_TEXT_WITH_CONNECTED,
+        bluetoothJson: LEGACY_BLUETOOTH_JSON_AIRPODS_CONNECTED,
+      }),
+    });
+
+    const [observation] = await sensor.sample();
+
+    expect(observation.fields.airpods_connected).toBe(true);
+    expect(observation.fields.bluetooth_input_connected).toBe(false);
+    expect(sensor.diagnose?.()).toBeNull();
+  });
+
+  test("omits Bluetooth fields and says so for a payload shape it does not recognise", async () => {
+    const sensor = createDevicesSensor({
+      isMac: true,
+      runCommand: fakeSystemProfiler({
+        displayText: REAL_DISPLAY_TEXT,
+        displayJson: REAL_DISPLAY_JSON,
+        bluetoothText: BLUETOOTH_TEXT_WITH_CONNECTED,
+        bluetoothJson: BLUETOOTH_JSON_UNRECOGNIZED_SHAPE,
+      }),
+    });
+
+    const [observation] = await sensor.sample();
+
+    // The displays still parsed, so the observation stands; only the unread fields are absent.
+    expect(observation.fields.external_display_count).toBe(0);
+    expect(observation.fields.airpods_connected).toBeUndefined();
+    expect(observation.fields.bluetooth_input_connected).toBeUndefined();
+    expect(sensor.diagnose?.()?.reason).toBe("device_profile_parse_failed");
+    expect(sensor.diagnose?.()?.detail).toContain("Bluetooth");
+  });
+
+  test("omits unparseable fields and says so rather than reporting zeroes", async () => {
+    const sensor = createDevicesSensor({
+      isMac: true,
+      runCommand: async () => "not json at all",
+    });
+
+    await expect(sensor.sample()).resolves.toEqual([]);
+    expect(sensor.diagnose?.()?.reason).toBe("device_profile_parse_failed");
+  });
+
+  /**
+   * The same silent-failure class that killed the idle sensor: no output means
+   * no fields, and with no diagnostic the sensor reads as healthy while
+   * returning nothing. diagnose() exists precisely to make that visible.
+   */
+  test("reports a diagnostic instead of looking healthy when system_profiler yields nothing", async () => {
+    const sensor = createDevicesSensor({
+      isMac: true,
+      runCommand: async () => null,
+    });
+
+    await expect(sensor.sample()).resolves.toEqual([]);
+    expect(sensor.diagnose?.()?.reason).toBe("device_profile_unavailable");
+    expect(sensor.diagnose?.()?.detail).toContain("SPDisplaysDataType");
+    expect(sensor.diagnose?.()?.detail).toContain("SPBluetoothDataType");
+  });
+
+  /**
+   * (f) The two probes fail independently. A run where one goes silent and the other returns
+   * something unreadable used to report only the silent reason, so the parse failure — the one
+   * that means this parser has fallen behind the payload shape — vanished from the diagnostic.
+   */
+  test("reports a silent probe and a parse failure distinctly when both happen at once", async () => {
+    const sensor = createDevicesSensor({
+      isMac: true,
+      runCommand: async (_command, args) =>
+        args.includes("SPDisplaysDataType") ? null : "not json at all",
+    });
+
+    await expect(sensor.sample()).resolves.toEqual([]);
+    const diagnostic = sensor.diagnose?.();
+    expect(diagnostic?.reason).toBe("device_profile_unavailable_and_parse_failed");
+    expect(diagnostic?.detail).toContain("produced no output");
+    expect(diagnostic?.detail).toContain("unexpected format");
+
+    // The single-cause reasons stay exactly as they were.
+    const silentOnly = createDevicesSensor({ isMac: true, runCommand: async () => null });
+    await silentOnly.sample();
+    expect(silentOnly.diagnose?.()?.reason).toBe("device_profile_unavailable");
+
+    const parseOnly = createDevicesSensor({ isMac: true, runCommand: async () => "not json at all" });
+    await parseOnly.sample();
+    expect(parseOnly.diagnose?.()?.reason).toBe("device_profile_parse_failed");
+  });
+
+  test("still reports a diagnostic when only one profiler call goes silent", async () => {
+    const sensor = createDevicesSensor({
+      isMac: true,
+      runCommand: async (command, args) =>
+        args.includes("SPDisplaysDataType") ? REAL_DISPLAY_JSON : null,
+    });
+
+    const [observation] = await sensor.sample();
+
+    expect(observation.fields.external_display_count).toBe(0);
+    expect(observation.fields.airpods_connected).toBeUndefined();
+    expect(sensor.diagnose?.()?.reason).toBe("device_profile_unavailable");
+    expect(sensor.diagnose?.()?.detail).toContain("SPBluetoothDataType");
   });
 });
 
@@ -1139,6 +1907,143 @@ describe("location classification", () => {
     await expect(sensor.available?.()).resolves.toBe(false);
     await expect(sensor.sample()).resolves.toEqual([]);
     expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `networksetup -getairportnetwork` answers "You are not associated with an AirPort network." on
+   * a zero exit for several unrelated causes. These pin that the diagnostic names the cause that
+   * actually applies rather than asserting the one that sounds actionable.
+   */
+  function locationSensorWith(
+    power: { stdout?: string; stderr?: string; exitCode?: number; timedOut?: boolean } | null,
+  ) {
+    return createLocationSensor({
+      isMac: true,
+      policyEnabled: async () => true,
+      runCommand: async () => "You are not associated with an AirPort network.",
+      captureCommand: async (_command, args) => {
+        if (!args.includes("-getairportpower") || !power) return null;
+        return { stdout: "", stderr: "", exitCode: 0, timedOut: false, ...power };
+      },
+      env: {},
+    });
+  }
+
+  test("reports a diagnostic when macOS withholds the SSID on a zero exit", async () => {
+    const sensor = locationSensorWith({ stdout: "Wi-Fi Power (en0): On" });
+
+    await expect(sensor.sample()).resolves.toEqual([]);
+    expect(sensor.diagnose?.()?.reason).toBe("location_ssid_withheld");
+  });
+
+  /**
+   * (e) The same nameless output means "not on Wi-Fi at all" on a wired Mac or with Wi-Fi off.
+   * Telling that user to grant Location Services sends them to a setting that changes nothing.
+   */
+  test("does not blame a permission when there is no Wi-Fi network to read", async () => {
+    const off = locationSensorWith({ stdout: "Wi-Fi Power (en0): Off" });
+    await expect(off.sample()).resolves.toEqual([]);
+    const offDiagnostic = off.diagnose?.();
+    expect(offDiagnostic?.reason).toBe("location_wifi_powered_off");
+    expect(offDiagnostic?.detail).toMatch(/turned off/i);
+    expect(`${offDiagnostic?.detail} ${offDiagnostic?.fixHint}`).not.toMatch(/Location Services/i);
+
+    /*
+     * Captured live from `networksetup -getairportpower en5` on a port that really is not Wi-Fi:
+     * the sentence lands on stdout, an "** Error:" line lands on stderr, and the process exits 10.
+     * A stdout-only runner that nulls out non-zero exits never sees the sentence at all, which is
+     * why this branch has to read the captured result rather than a trimmed stdout string.
+     */
+    const wired = locationSensorWith({
+      stdout: "en0 is not a Wi-Fi interface.",
+      stderr: "** Error: Error obtaining wireless information.",
+      exitCode: 10,
+    });
+    await expect(wired.sample()).resolves.toEqual([]);
+    const wiredDiagnostic = wired.diagnose?.();
+    expect(wiredDiagnostic?.reason).toBe("location_wifi_interface_absent");
+    expect(`${wiredDiagnostic?.detail} ${wiredDiagnostic?.fixHint}`).not.toMatch(/Location Services/i);
+  });
+
+  /**
+   * (a) A power probe that answers nothing establishes nothing. Reporting
+   * `location_wifi_interface_absent` for it told a user whose Wi-Fi is on and working that en0 is
+   * not a Wi-Fi interface — the same wrong-cause failure, pointed the other way. The honest answer
+   * is to say the cause is unknown and name what would settle it.
+   */
+  test("says the cause is unestablished when the Wi-Fi power probe itself fails", async () => {
+    for (const probe of [
+      null,
+      { stdout: "", stderr: "", exitCode: 1 },
+      { stdout: "", stderr: "", exitCode: null as unknown as number, timedOut: true },
+      { stdout: "some future networksetup wording", exitCode: 0 },
+    ]) {
+      const sensor = locationSensorWith(probe);
+      await expect(sensor.sample()).resolves.toEqual([]);
+      const diagnostic = sensor.diagnose?.();
+      const message = `${diagnostic?.detail} ${diagnostic?.fixHint}`;
+
+      expect(diagnostic?.reason).toBe("location_wifi_probe_failed");
+      // It must not assert any of the four causes it did not establish.
+      expect(message).toMatch(/not established/i);
+      expect(message).not.toMatch(/en0 is not a Wi-Fi interface/i);
+      expect(message).not.toMatch(/Wi-Fi is turned off/i);
+      // And it has to say what would settle it.
+      expect(message).toMatch(/networksetup -getairportpower en0/);
+    }
+
+    // A timed-out probe says so, since that is the one thing about it that was established.
+    const timedOut = locationSensorWith({ stdout: "", timedOut: true });
+    await timedOut.sample();
+    expect(timedOut.diagnose?.()?.detail).toMatch(/timed out/i);
+  });
+
+  /**
+   * (e) With Wi-Fi on, a withheld SSID and an unjoined radio are genuinely indistinguishable from
+   * this command, so the message has to carry both instead of picking one.
+   */
+  test("names both causes when Wi-Fi is on and the SSID is still absent", async () => {
+    const sensor = locationSensorWith({ stdout: "Wi-Fi Power (en0): On" });
+    await sensor.sample();
+    const diagnostic = sensor.diagnose?.();
+    const message = `${diagnostic?.detail} ${diagnostic?.fixHint}`;
+
+    expect(diagnostic?.reason).toBe("location_ssid_withheld");
+    expect(message).toMatch(/not joined/i);
+    expect(message).toMatch(/Location Services/i);
+    // The permission is offered conditionally, not asserted as the cause.
+    expect(message).toMatch(/if you are/i);
+  });
+
+  /**
+   * Pins the invariant that made classifyLocation's old null branch dead: an
+   * absent SSID leaves via the diagnostic above, so classification is only ever
+   * reached with a real name. "unknown" is a classification outcome for an
+   * unrecognised network, never a stand-in for a missing one.
+   */
+  test("classifies only when an SSID is actually present", async () => {
+    const withheld = createLocationSensor({
+      isMac: true,
+      policyEnabled: async () => true,
+      runCommand: async () => "You are not associated with an AirPort network.",
+      // Stubbed so the missing-SSID path never shells out to the real networksetup under test.
+      captureCommand: async () => ({ stdout: "Wi-Fi Power (en0): On", stderr: "", exitCode: 0, timedOut: false }),
+      env: {},
+    });
+    const observations = await withheld.sample();
+    expect(observations).toEqual([]);
+    expect(JSON.stringify(observations)).not.toContain("location_class");
+
+    const associated = createLocationSensor({
+      isMac: true,
+      policyEnabled: async () => true,
+      runCommand: async () => "Current Wi-Fi Network: HomeNet",
+      env: { SENSE_HOME_WIFI_SSIDS: "HomeNet" },
+    });
+    const [observation] = await associated.sample();
+    expect(observation.fields.location_class).toBe("home_office");
+    expect(JSON.stringify(observation.fields)).not.toContain("HomeNet");
+    expect(associated.diagnose?.()).toBeNull();
   });
 });
 

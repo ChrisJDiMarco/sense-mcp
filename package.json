@@ -8,8 +8,12 @@
   "bin": {
     "sense-mcp": "dist/index.js"
   },
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "os": [
+    "darwin"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ChrisJDiMarco/sense-mcp.git"
@@ -32,6 +36,7 @@
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "smoke": "node scripts/smoke.cjs",
+    "smoke:ci": "d=$(mktemp -d /tmp/sense-smoke.XXXXXX); SENSE_BROKER_SOCKET=$d/b.sock SENSE_BROKER_IDLE_MS=2000 SENSE_MOCK=1 SENSE_LEDGER_DISABLED=1 SENSE_LEDGER_PATH=$d/ledger.jsonl SENSE_POLICY_PATH=$d/policy.json SENSE_CONSENT_DIR=$d/consent SENSE_SNAPSHOT_DIR=$d/snapshots SENSE_PANEL_RUNTIME_DIR=$d/panel node scripts/smoke.cjs; rc=$?; rm -rf $d; exit $rc",
     "eval:routing": "node scripts/eval-routing.cjs",
     "eval:prompt-pack": "node scripts/eval-prompt-pack.cjs",
     "ios:build": "xcodebuild -project apps/ios/SenseIOS/SenseIOS.xcodeproj -scheme SenseIOS -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' build",
@@ -39,8 +44,9 @@
     "test:coverage": "vitest run --coverage",
     "audit:prod": "npm audit --omit=dev --audit-level=moderate",
     "audit:all": "npm audit --audit-level=moderate",
+    "lint": "oxlint src/sensors",
     "check:package": "node scripts/check-package.cjs",
-    "check": "npm run build && npm run test:coverage && npm run eval:routing && npm run eval:prompt-pack && npm run audit:prod && npm run audit:all",
+    "check": "npm run build && npm run lint && npm run test:coverage && npm run eval:routing && npm run eval:prompt-pack && npm run audit:prod && npm run audit:all",
     "release:dry-run": "npm run check && npm run check:package",
     "prepublishOnly": "npm run check"
   },
@@ -60,14 +66,16 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "zod": "^3.25.0"
+    "@modelcontextprotocol/server": "^2.0.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^22.20.1",
-    "@vitest/coverage-v8": "^4.1.10",
-    "tsx": "^4.23.0",
-    "typescript": "^5.4.0",
-    "vitest": "^4.1.10"
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@types/node": "^22.20.3",
+    "@vitest/coverage-v8": "^5.0.1",
+    "oxlint": "^1.83.0",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.1"
   }
 }

@@ -132,10 +132,26 @@ Release checks:
 
 | Check | Command or matrix |
 |---|---:|
-| Node build, tests, evals, and audits | `npm run check` |
+| Node build, lint, tests, evals, and audits | `npm run check` |
+| Sensor privacy lint only | `npm run lint` |
+| End-to-end stdio transport check | `npm run smoke:ci` |
 | Node and package preflight | `npm run release:dry-run` |
 | iOS companion | `npm run ios:build` |
-| CI matrix | Node 22 and Node 24 |
+| CI matrix | Node 22 and Node 24, macOS |
+
+`npm run lint` runs [oxlint](https://oxc.rs) over `src/sensors/**` and enforces
+the sensor privacy invariants from
+[CONTRIBUTING.md](./CONTRIBUTING.md#sensor-contract) as errors: no network calls
+from a sensor, no writes of raw sensor data to persistent storage, and no
+`console.*`. It is scoped to that directory deliberately — those rules are a
+privacy contract for sensors, not a house style for the whole tree.
+
+`npm run smoke:ci` starts the built binary through a real MCP stdio client and
+calls a tool end to end. It is the only guard on the invariant that stdout
+carries the MCP transport and nothing else, and it runs against its own private
+broker socket, policy, consent, ledger and snapshot paths, so it cannot reach
+your real broker or leave state behind. (`npm run smoke` is the same check
+against your actual local setup.)
 
 See [CHANGELOG.md](./CHANGELOG.md), [ROADMAP.md](./ROADMAP.md), and
 [docs/KNOWN_LIMITATIONS.md](./docs/KNOWN_LIMITATIONS.md).
@@ -447,13 +463,42 @@ or `healthy`. For denied or unavailable capabilities,
 `privacy.capability_details` can include the sensor, state, reason, detail, and
 fix hint.
 
+`get_relevant_context` is listed first on purpose: it is the tool a client
+should reach for before the raw getters.
+
 Context tools accept `compact`, `brief`, `focused`, `debug`, and `diff`
 projections plus `cached`, `if_stale`, or `force` refresh. The reported
 `max_bytes` is enforced for the complete structured response at three bytes per
 estimated token. `estimated_tokens` is conservative because model tokenizers
-differ. `context_satisfied: true` means the client should not call another Sense
-context getter for the same request. Every stored field expires on its own TTL;
-refresh is limited to sensors declared for the requested domains.
+differ. Every stored field expires on its own TTL; refresh is limited to sensors
+declared for the requested domains.
+
+### Budgets and partial responses
+
+`max_tokens` bounds the **complete** response, not the frame alone. Every
+context tool and the router accept the same closed range, **320 to 8,192**; a
+value outside it is rejected at schema validation. Omitting it gives the
+projection default:
+
+| projection | default | used by |
+|---|---:|---|
+| `compact` | `1150` | — |
+| `brief` | `1500` | `get_screen_context`, `get_user_state`, `get_environment_context`, `get_schedule_context` |
+| `focused` | `2800` | `get_context_frame`, `get_domains` |
+| `debug` | `5600` | — |
+| `diff` | `800` | — |
+
+`get_relevant_context` takes no projection and defaults to `2800`, because its
+ceiling covers the routing plan, the guidance, and the planned domains' context
+together.
+
+`context_satisfied: true` means every requested domain that has data is present,
+so the client should not call another Sense context getter for the same request.
+`context_satisfied: false` is **not** an error: `ok` stays `true`, the context
+that fit is returned, and a `context_omitted` block names the domains left out,
+the reason, and a `suggested_max_tokens` that returns the complete response when
+one exists within the accepted range. Only a budget too small to carry any
+response at all fails, with the retryable error `context_budget_too_small`.
 
 ## Sensor Matrix
 

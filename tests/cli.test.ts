@@ -1,4 +1,7 @@
-import { describe, expect, test } from "vitest";
+import { lstat, mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, test, vi } from "vitest";
 import {
   buildInitConfig,
   capabilityPolicyKey,
@@ -8,6 +11,7 @@ import {
   renderCodexInitBlock,
   renderInitPreview,
   renderPermissionStatus,
+  runCli,
   setSenseEnvInToml,
   upsertCodexSenseServer,
 } from "../src/cli.js";
@@ -215,5 +219,54 @@ describe("sense-mcp init helpers", () => {
     expect(preview).toContain("Sense init (codex, developer profile)");
     expect(preview).toContain("Run sense-mcp doctor");
     expect(preview).toContain("sense-mcp settings --open");
+  });
+});
+
+describe("sense-mcp broker", () => {
+  async function captureCli(argv: string[]): Promise<{ code: number; out: string; err: string }> {
+    const out: string[] = [];
+    const err: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation((...parts) => {
+      out.push(parts.join(" "));
+    });
+    const error = vi.spyOn(console, "error").mockImplementation((...parts) => {
+      err.push(parts.join(" "));
+    });
+    try {
+      return { code: await runCli(argv), out: out.join("\n"), err: err.join("\n") };
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  }
+
+  test("reset clears the runtime files of a broker that is gone", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "sense-cli-broker-reset-"));
+    const socketPath = path.join(dir, "broker.sock");
+    await writeFile(socketPath, "stale");
+    await writeFile(`${socketPath}.owner.json`, "{}");
+    const previous = process.env.SENSE_BROKER_SOCKET;
+    process.env.SENSE_BROKER_SOCKET = socketPath;
+
+    try {
+      const result = await captureCli(["broker", "reset"]);
+
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(`Sense broker socket: ${socketPath}`);
+      expect(result.out).toContain(`Removed ${socketPath}`);
+      expect(result.out).toContain("Sense will elect a new broker");
+      await expect(lstat(socketPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      if (previous === undefined) delete process.env.SENSE_BROKER_SOCKET;
+      else process.env.SENSE_BROKER_SOCKET = previous;
+    }
+  });
+
+  test("rejects an unknown broker subcommand", async () => {
+    const result = await captureCli(["broker", "restart"]);
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("Unknown broker command: restart");
+    expect(result.err).toContain("sense-mcp broker <command>");
   });
 });

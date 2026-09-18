@@ -1,0 +1,41 @@
+{
+  "description": "Committed honest routing score for the two statistical held-out corpora, and for nothing else. Every number here was measured, not tuned for: the router is not adjusted until a corpus reads 100%. scripts/eval-routing.cjs fails on any regression against these counts or against known_misses, and also fails when a known miss starts passing, so an improvement has to be recorded here on purpose. The curated fixtures, held-out-negatives.json and privacy-capture-corpus.json are deliberately absent: they are hard gates, a miss in them is a defect rather than a measurement, and --update-baseline refuses to run while any of them is failing. Update with `node scripts/eval-routing.cjs --update-baseline` and say in the commit message what changed.",
+  "recorded_at": "2026-09-18",
+  "counts": {
+    "held_out_paraphrases": {
+      "intent": 39,
+      "minimum_tool": 39,
+      "total": 40
+    },
+    "held_out_situation_positives": {
+      "intent": 9,
+      "minimum_tool": 9,
+      "total": 22
+    },
+    "held_out_situation_negatives": {
+      "passed": 22,
+      "total": 22
+    }
+  },
+  "known_misses": {
+    "held_out_paraphrases": [
+      "I'm slammed today, what should I drop?"
+    ],
+    "held_out_situation_positives": [
+      "is it too loud in here to take a call",
+      "how quiet is it in here",
+      "is the room bright enough to work in",
+      "how much battery is left",
+      "is anything still playing",
+      "is there time to start something big before the next call",
+      "what is left on the calendar today",
+      "which app is in front right now",
+      "what is the active project",
+      "is there uncommitted work sitting around",
+      "am I in decent shape to start a hard task",
+      "is now a good time for a long stretch of concentration",
+      "what is wrong with the window in front"
+    ],
+    "held_out_situation_negatives": []
+  }
+}

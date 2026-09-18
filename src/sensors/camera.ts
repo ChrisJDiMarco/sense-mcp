@@ -7,7 +7,7 @@ import {
   type PersistedSnapshot,
 } from "../snapshotFiles.js";
 import type { Observation, Sensor, SensorDiagnostic } from "../types.js";
-import { isMac, runBuffer, runCapture, type CommandResult } from "./exec.js";
+import { isMac, runBuffer, runCapture } from "./exec.js";
 
 const TTL_MS = 120_000;
 

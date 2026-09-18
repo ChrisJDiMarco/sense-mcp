@@ -1,8 +1,10 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, open, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, open, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import type {
   ContextDiagnostic,
   ContextProvider,
@@ -35,6 +37,60 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_LOCK_STALE_MS = 10_000;
 const DEFAULT_SOCKET_STALE_MS = 10_000;
 const DEFAULT_IDLE_SHUTDOWN_MS = 30_000;
+const DEFAULT_PROBE_TIMEOUT_MS = 250;
+const PROCESS_LOOKUP_TIMEOUT_MS = 2_000;
+/** `ps` reports whole seconds, and the owner record is written after the fork. */
+const PROCESS_START_TOLERANCE_MS = 2_000;
+/**
+ * A forward step of the wall clock moves the derived boot time without moving
+ * any recorded start time, which would make a live owner look pre-boot. Only
+ * the `ps`-unavailable fallback depends on that estimate, so a generous margin
+ * costs nothing but the delay before a post-reboot record is proven stale.
+ */
+const CLOCK_STEP_TOLERANCE_MS = 5 * 60_000;
+/**
+ * How long an owner record that cannot be interpreted at all keeps protecting
+ * its socket. The record is the only evidence that identifies a live owner, so
+ * losing it has to make the socket *more* protected — but not forever, because
+ * a corrupt record would otherwise wedge every future election until a human
+ * deleted a file they do not know about.
+ */
+const DEFAULT_OWNER_QUARANTINE_MS = 60_000;
+/**
+ * Every refusal to remove a socket is a refusal to start, so each one has to
+ * name the command that clears the state it is refusing over. `sense-mcp broker
+ * reset` removes the socket, owner record, lock, and preserved copies, but only
+ * once nothing answers the socket — so it is safe to suggest unconditionally.
+ */
+const BROKER_WEDGE_ESCAPE_HATCH =
+  "Quit the MCP clients using Sense, then run `sense-mcp broker reset` to clear the stale runtime files.";
+/** One recover-and-retry, exactly like the warm request path. */
+const CONNECT_ATTEMPTS = 2;
+/**
+ * Bounds establishing the socket itself, on every connection this client makes
+ * — the session's first one and every reconnect a later request triggers. A
+ * listener with a saturated backlog neither completes the connection nor
+ * reports an error, and no request timer is running yet.
+ */
+export const BROKER_CONNECT_TIMEOUT_MS = 2_000;
+/**
+ * Bounds only the `ping` reply that opens a session. A broker answers `ping`
+ * without touching a sensor, so a peer that accepts the connection and stays
+ * quiet past this is wedged, not slow. Bounding the handshake keeps a wedged
+ * broker from holding every adapter for the full request timeout before the
+ * recover/elect path runs.
+ *
+ * The two are separate on purpose: establishment applies to every request that
+ * has to reconnect, the handshake only to `connect`. Worst case for `connect`
+ * is therefore BROKER_CONNECT_TIMEOUT_MS + BROKER_HANDSHAKE_TIMEOUT_MS per
+ * attempt, and CONNECT_ATTEMPTS of those.
+ */
+export const BROKER_HANDSHAKE_TIMEOUT_MS = 2_000;
+/**
+ * `end()` waits for the peer's FIN. A half-open peer never sends one, so the
+ * graceful drain is bounded and then the socket is destroyed outright.
+ */
+const CLOSE_DRAIN_TIMEOUT_MS = 250;
 
 interface BrokerRequest {
   id: string;
@@ -66,6 +122,7 @@ export interface BrokerServerOptions {
   daemonOptions?: DaemonOptions;
   idleShutdownMs?: number;
   staleSocketMs?: number;
+  ownerQuarantineMs?: number;
 }
 
 export interface BrokerClientOptions {
@@ -104,30 +161,219 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-async function readOwner(socketPath: string): Promise<BrokerOwnerMetadata | undefined> {
+const runProcessLookup = promisify(execFile);
+
+/**
+ * Derived from the wall clock, because `os.uptime()` is monotonic but
+ * `started_at` is a wall-clock stamp: the two can only be compared in wall-clock
+ * terms. A forward step of the clock therefore moves this estimate forward
+ * without moving any recorded start time, which is why callers must tolerate
+ * CLOCK_STEP_TOLERANCE_MS of drift before treating a record as pre-boot.
+ */
+function bootTimeMs(): number {
+  return Date.now() - os.uptime() * 1_000;
+}
+
+/**
+ * Start time of a live pid, or undefined when it cannot be read. The command is
+ * matched only to confirm a well-formed `ps` line: Sense runs under whatever
+ * binary the host launched — a version manager's shim, a wrapper script, an
+ * embedded runtime — so the executable's *name* is never evidence about a pid.
+ */
+async function currentProcess(pid: number): Promise<{ startedAtMs: number } | undefined> {
   try {
-    const value = JSON.parse(
-      await readPrivateText(brokerOwnerPath(socketPath), 4_096),
-    ) as BrokerOwnerMetadata;
-    if (
-      value.protocol_version !== BROKER_PROTOCOL_VERSION ||
-      typeof value.pid !== "number" ||
-      typeof value.token !== "string" ||
-      typeof value.socket_dev !== "number" ||
-      typeof value.socket_ino !== "number"
-    ) {
-      return undefined;
-    }
-    return value;
+    const { stdout } = await runProcessLookup("/bin/ps", ["-o", "lstart=,comm=", "-p", String(pid)], {
+      timeout: PROCESS_LOOKUP_TIMEOUT_MS,
+    });
+    const match = stdout
+      .trim()
+      .match(/^(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+\S.*$/);
+    if (!match) return undefined;
+    const startedAtMs = Date.parse(match[1].replace(/\s+/g, " "));
+    if (!Number.isFinite(startedAtMs)) return undefined;
+    return { startedAtMs };
   } catch {
     return undefined;
   }
+}
+
+/**
+ * What can be proven about a recorded broker owner.
+ *
+ * - `stale`: the recorded process is provably gone, so its socket is removable.
+ * - `live`: the pid is alive and its start time is consistent with the record,
+ *   which is as close to "this is still the broker" as a pid can get.
+ * - `unknown`: neither could be established. Nothing is removed on an unknown,
+ *   but an unknown that never resolves is a permanent wedge, so the caller
+ *   bounds how long it protects the socket.
+ */
+type OwnerLiveness = "live" | "stale" | "unknown";
+
+/**
+ * Prove — or refuse to prove — that a recorded broker owner is gone.
+ * `process.kill(pid, 0)` alone is not enough: it reports a recycled pid and an
+ * EPERM pid owned by somebody else as live forever. The only identity evidence
+ * that holds is time: a broker starts before it writes its record, so a pid
+ * that started after the record was written is not the process that wrote it.
+ */
+async function pidLiveness(
+  pid: number,
+  startedAt: string | undefined,
+  recordWrittenAtMs?: number,
+): Promise<OwnerLiveness> {
+  if (!processIsAlive(pid)) return "stale";
+  const recordedAtMs = startedAt === undefined ? Number.NaN : Date.parse(startedAt);
+  // `ps` is the only source that does not go through the wall clock twice, so
+  // it decides whenever it answers.
+  const current = await currentProcess(pid);
+  if (!Number.isFinite(recordedAtMs)) {
+    // The record names no start time it can be checked against. The mtime of
+    // the record itself is a weaker but real substitute: it cannot prove the
+    // pid *is* the owner, only that a younger pid cannot be.
+    if (
+      current &&
+      recordWrittenAtMs !== undefined &&
+      current.startedAtMs > recordWrittenAtMs + PROCESS_START_TOLERANCE_MS
+    ) {
+      return "stale";
+    }
+    return "unknown";
+  }
+  if (current) {
+    return current.startedAtMs > recordedAtMs + PROCESS_START_TOLERANCE_MS ? "stale" : "live";
+  }
+  // `ps` could not answer, so fall back to boot time: a record written before
+  // this boot cannot describe any process running now. The estimate moves with
+  // the wall clock, so a record only counts as pre-boot once it predates the
+  // estimate by more than a tolerated clock step.
+  return recordedAtMs < bootTimeMs() - CLOCK_STEP_TOLERANCE_MS ? "stale" : "live";
+}
+
+function ownerLiveness(
+  owner: BrokerOwnerMetadata,
+  recordWrittenAtMs?: number,
+): Promise<OwnerLiveness> {
+  return pidLiveness(owner.pid, owner.started_at, recordWrittenAtMs);
+}
+
+/** Every variant carries `writtenAtMs`: it starts the quarantine clock, and it
+ * is the only start-time reference available when a record names none. */
+type BrokerOwnerRecord =
+  | { state: "absent" }
+  /** Readable, but written by a broker speaking another protocol version. */
+  | { state: "foreign"; pid: number; started_at?: string; writtenAtMs?: number }
+  /** No interpretable owner at all. */
+  | { state: "unusable"; writtenAtMs?: number }
+  | { state: "present"; owner: BrokerOwnerMetadata; writtenAtMs?: number };
+
+function ownerRecordWrittenAtMs(socketPath: string): Promise<number | undefined> {
+  return lstat(brokerOwnerPath(socketPath)).then(
+    (entry) => entry.mtimeMs,
+    () => undefined,
+  );
+}
+
+/**
+ * A record that exists but cannot be trusted has to make its owner *more*
+ * protected, never less: collapsing it to "no owner" would hand the socket to
+ * the mtime rule, which cannot tell a live broker from an abandoned path. How
+ * much more depends on how much of the record survived:
+ *
+ * - a record from another protocol version still names a pid, so its owner is
+ *   protected for exactly as long as that pid is alive — no time bound needed;
+ * - a record that cannot be parsed at all names nothing, so its socket is
+ *   quarantined rather than protected forever (see DEFAULT_OWNER_QUARANTINE_MS).
+ */
+async function readOwnerRecord(socketPath: string): Promise<BrokerOwnerRecord> {
+  let text: string;
+  try {
+    text = await readPrivateText(brokerOwnerPath(socketPath), 4_096);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return { state: "absent" };
+    return { state: "unusable", writtenAtMs: await ownerRecordWrittenAtMs(socketPath) };
+  }
+  const writtenAtMs = await ownerRecordWrittenAtMs(socketPath);
+  let value: BrokerOwnerMetadata;
+  try {
+    value = JSON.parse(text) as BrokerOwnerMetadata;
+  } catch {
+    return { state: "unusable", writtenAtMs };
+  }
+  if (typeof value !== "object" || value === null || typeof value.pid !== "number") {
+    return { state: "unusable", writtenAtMs };
+  }
+  if (value.protocol_version !== BROKER_PROTOCOL_VERSION) {
+    // The pid is the one field whose meaning cannot change between versions.
+    // Nothing else in a foreign record — least of all the socket identity — is
+    // safe to interpret, so liveness alone decides.
+    return {
+      state: "foreign",
+      pid: value.pid,
+      ...(typeof value.started_at === "string" ? { started_at: value.started_at } : {}),
+      writtenAtMs,
+    };
+  }
+  if (
+    typeof value.token !== "string" ||
+    typeof value.socket_dev !== "number" ||
+    typeof value.socket_ino !== "number"
+  ) {
+    return { state: "unusable", writtenAtMs };
+  }
+  // `started_at` is deliberately not required here: a record without one still
+  // names a pid, and `ownerLiveness` reports that as unknown rather than stale.
+  // Rejecting the record instead would lose the pid entirely.
+  return { state: "present", owner: value, writtenAtMs };
+}
+
+async function readOwner(socketPath: string): Promise<BrokerOwnerMetadata | undefined> {
+  const record = await readOwnerRecord(socketPath);
+  return record.state === "present" ? record.owner : undefined;
+}
+
+/**
+ * Split a newline-delimited read into whole messages.
+ *
+ * The wire limit bounds a *message*, which is what the broker's own response
+ * guard enforces. A reader that bounds its buffer instead rejects a read that
+ * happens to carry several legal messages — the peer sees a bare disconnect,
+ * which is indistinguishable from a broker that died, so it elects a
+ * replacement and walks back into the same read. Both directions therefore
+ * measure the same unit: each complete line, and whatever incomplete line is
+ * still accumulating.
+ */
+function readFramedMessages(buffer: string): { lines: string[]; rest: string; oversized: boolean } {
+  const lines: string[] = [];
+  let rest = buffer;
+  for (;;) {
+    const newline = rest.indexOf("\n");
+    if (newline < 0) break;
+    const line = rest.slice(0, newline);
+    rest = rest.slice(newline + 1);
+    if (Buffer.byteLength(line) > MAX_MESSAGE_BYTES) return { lines, rest, oversized: true };
+    if (line.trim()) lines.push(line);
+  }
+  return { lines, rest, oversized: Buffer.byteLength(rest) > MAX_MESSAGE_BYTES };
 }
 
 function errorCode(error: unknown): string | undefined {
   return typeof error === "object" && error !== null && "code" in error
     ? String((error as { code?: unknown }).code)
     : undefined;
+}
+
+/**
+ * Every timer on the election and stale-socket paths is unref'd, so without one
+ * ref'd handle the event loop can empty and the process exit 0 with no output
+ * before the failure is ever reported to the caller.
+ */
+async function withEventLoopKeepAlive<T>(run: () => Promise<T>): Promise<T> {
+  const keepAlive = setInterval(() => undefined, 1_000);
+  try {
+    return await run();
+  } finally {
+    clearInterval(keepAlive);
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -237,7 +483,9 @@ export class BrokerServer {
     if (this.started) return;
     this.closing = false;
     this.closePromise = undefined;
-    await this.bindPrivateSocket();
+    // The elected broker child reaches this before it owns any ref'd handle;
+    // a bind failure must surface as an error, not as a silent exit 0.
+    await withEventLoopKeepAlive(() => this.bindPrivateSocket());
     this.started = true;
     try {
       await this.daemon.start();
@@ -281,10 +529,16 @@ export class BrokerServer {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
     if (preservedPath) {
-      const current = await lstat(this.options.socketPath).catch(() => undefined);
-      if (!current) {
-        await rename(preservedPath, this.options.socketPath);
-      }
+      // `link` is atomic and fails with EEXIST, so a successor that claimed the
+      // path while this broker was closing is never clobbered.
+      const restored = await link(preservedPath, this.options.socketPath).then(
+        () => true,
+        (error) => errorCode(error) === "EEXIST",
+      );
+      // Any other failure leaves this copy as the only surviving reference to
+      // somebody else's socket; leaking a file is cheaper than destroying it,
+      // and `sense-mcp broker reset` removes preserved copies.
+      if (restored) await unlink(preservedPath).catch(() => undefined);
     }
     await this.unlinkOwnedSocket();
     this.started = false;
@@ -312,7 +566,7 @@ export class BrokerServer {
       this.server = await bind();
     } catch (error) {
       if (errorCode(error) !== "EADDRINUSE") throw error;
-      if (await probeBroker(this.options.socketPath, 250)) {
+      if (await probeBrokerSocket(this.options.socketPath, 250)) {
         throw new Error("Sense broker is already running");
       }
       await this.removeProvenStaleSocket();
@@ -325,6 +579,12 @@ export class BrokerServer {
   }
 
   private accept(socket: Socket): void {
+    // The listener stays bound for the filesystem work in performClose; a client
+    // adopted here would lose its broker seconds later without electing one.
+    if (this.closing) {
+      socket.destroy();
+      return;
+    }
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = undefined;
     this.sockets.add(socket);
@@ -332,18 +592,13 @@ export class BrokerServer {
     let buffer = "";
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => {
-      buffer += chunk;
-      if (Buffer.byteLength(buffer) > MAX_MESSAGE_BYTES) {
+      const framed = readFramedMessages(buffer + chunk);
+      buffer = framed.rest;
+      if (framed.oversized) {
         socket.destroy(new Error("broker request too large"));
         return;
       }
-      for (;;) {
-        const newline = buffer.indexOf("\n");
-        if (newline < 0) break;
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        if (line.trim()) void this.handleLine(socket, line);
-      }
+      for (const line of framed.lines) void this.handleLine(socket, line);
     });
     socket.on("close", () => {
       this.sockets.delete(socket);
@@ -361,6 +616,10 @@ export class BrokerServer {
       }
       id = request.id;
       if (request.method === "ping") {
+        if (this.closing) {
+          this.send(socket, { id, ok: false, error: "Sense broker is shutting down" });
+          return;
+        }
         this.send(socket, {
           id,
           ok: true,
@@ -382,7 +641,25 @@ export class BrokerServer {
   }
 
   private send(socket: Socket, response: BrokerResponse): void {
-    if (!socket.destroyed) socket.write(`${JSON.stringify(response)}\n`);
+    if (socket.destroyed) return;
+    const line = `${JSON.stringify(response)}\n`;
+    const bytes = Buffer.byteLength(line);
+    // A response past the wire limit trips the client's own guard, which
+    // destroys the connection and reports a plain disconnect — indistinguishable
+    // from a broker that died, so every adapter elects a replacement and walks
+    // straight back into the same oversized frame. Refusing the request by name
+    // keeps the connection and tells the caller what actually went wrong.
+    if (bytes > MAX_MESSAGE_BYTES && response.ok) {
+      socket.write(
+        `${JSON.stringify({
+          id: response.id,
+          ok: false,
+          error: `Sense broker response is ${bytes} bytes, past the ${MAX_MESSAGE_BYTES}-byte broker wire limit`,
+        } satisfies BrokerResponse)}\n`,
+      );
+      return;
+    }
+    socket.write(line);
   }
 
   private async getContext(request: ContextRequest): Promise<ContextResult> {
@@ -439,7 +716,7 @@ export class BrokerServer {
 
   private async removeProvenStaleSocket(): Promise<void> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      if (await probeBroker(this.options.socketPath, 250)) {
+      if (await probeBrokerSocket(this.options.socketPath, 250)) {
         throw new Error("Sense broker became reachable during stale-socket verification");
       }
       if (attempt < 2) await sleep(25);
@@ -447,23 +724,93 @@ export class BrokerServer {
 
     const identity = await lstat(this.options.socketPath).catch(() => undefined);
     if (!identity) return;
-    const owner = await readOwner(this.options.socketPath);
-    if (owner) {
-      if (processIsAlive(owner.pid)) {
-        throw new Error(`Sense broker socket is owned by a live process (${owner.pid})`);
+    const record = await readOwnerRecord(this.options.socketPath);
+    if (record.state === "present") {
+      const owner = record.owner;
+      const liveness = await ownerLiveness(owner, record.writtenAtMs);
+      if (liveness === "live") {
+        throw new Error(
+          `Sense broker socket is owned by a live process (${owner.pid}). ${BROKER_WEDGE_ESCAPE_HATCH}`,
+        );
       }
-      if (owner.socket_dev !== identity.dev || owner.socket_ino !== identity.ino) {
-        throw new Error("Sense broker socket identity does not match stale owner metadata");
+      const identityMatches =
+        owner.socket_dev === identity.dev && owner.socket_ino === identity.ino;
+      if (liveness === "unknown" || !identityMatches) {
+        // Either the record cannot be reconciled with its own pid, or it
+        // describes a different socket than the one on disk. Neither proves a
+        // live owner and neither proves a dead one, so the socket is protected
+        // for the quarantine window and then falls back to the age rule.
+        this.assertOwnerQuarantineElapsed(
+          record.writtenAtMs,
+          identity.mtimeMs,
+          liveness === "unknown"
+            ? `Sense broker owner (${owner.pid}) could not be proven live or gone`
+            : "Sense broker socket identity does not match its owner record",
+        );
+        this.assertSocketOldEnough(identity.mtimeMs);
       }
+    } else if (record.state === "foreign") {
+      const liveness = await pidLiveness(record.pid, record.started_at, record.writtenAtMs);
+      if (liveness === "live") {
+        throw new Error(
+          `Sense broker socket is owned by a live process (${record.pid}) speaking another protocol version. ${BROKER_WEDGE_ESCAPE_HATCH}`,
+        );
+      }
+      if (liveness === "unknown") {
+        this.assertOwnerQuarantineElapsed(
+          record.writtenAtMs,
+          identity.mtimeMs,
+          `Sense broker owner (${record.pid}) speaking another protocol version could not be proven live or gone`,
+        );
+        this.assertSocketOldEnough(identity.mtimeMs);
+      }
+    } else if (record.state === "unusable") {
+      this.assertOwnerQuarantineElapsed(
+        record.writtenAtMs,
+        identity.mtimeMs,
+        "Sense broker owner record could not be read",
+      );
+      // The quarantine has run out: nothing identifies an owner, and the socket
+      // has failed every probe above, so it falls back to the age rule.
+      this.assertSocketOldEnough(identity.mtimeMs);
     } else {
-      const staleAfter = this.options.staleSocketMs ?? DEFAULT_SOCKET_STALE_MS;
-      if (Date.now() - identity.mtimeMs < staleAfter) {
-        throw new Error("Sense broker socket is unresponsive but not old enough to prove stale");
-      }
+      this.assertSocketOldEnough(identity.mtimeMs);
     }
 
     await unlink(this.options.socketPath);
     await unlink(brokerOwnerPath(this.options.socketPath)).catch(() => undefined);
+  }
+
+  private assertSocketOldEnough(mtimeMs: number): void {
+    const staleAfter = this.options.staleSocketMs ?? DEFAULT_SOCKET_STALE_MS;
+    if (Date.now() - mtimeMs < staleAfter) {
+      throw new Error(
+        `Sense broker socket is unresponsive but not old enough to prove stale. ${BROKER_WEDGE_ESCAPE_HATCH}`,
+      );
+    }
+  }
+
+  /**
+   * An owner record that cannot prove its owner is gone protects the socket,
+   * because removing a live broker's socket kills it out from under connected
+   * clients. But protection with no bound is its own failure: it wedges every
+   * future election on a file nobody knows about. So the socket is refused only
+   * until both the record and the socket have been untouched for the quarantine
+   * window, after which the wedge breaks on its own.
+   */
+  private assertOwnerQuarantineElapsed(
+    writtenAtMs: number | undefined,
+    socketMtimeMs: number,
+    reason: string,
+  ): void {
+    const quarantineMs = this.options.ownerQuarantineMs ?? DEFAULT_OWNER_QUARANTINE_MS;
+    const touchedAtMs = Math.max(writtenAtMs ?? 0, socketMtimeMs);
+    const remainingMs = touchedAtMs + quarantineMs - Date.now();
+    if (remainingMs > 0) {
+      throw new Error(
+        `${reason}; refusing to remove the socket for another ${Math.ceil(remainingMs / 1_000)}s. ${BROKER_WEDGE_ESCAPE_HATCH}`,
+      );
+    }
   }
 
   private async unlinkOwnedSocket(): Promise<void> {
@@ -527,15 +874,36 @@ export class BrokerClient implements ContextProvider {
     options: BrokerClientOptions = {},
   ): Promise<BrokerClient> {
     const client = new BrokerClient(socketPath, options.recover, options.requestTimeoutMs);
-    await client.ensureConnected();
-    const ping = (await client.request("ping", undefined, false)) as {
-      protocol_version?: number;
-    };
-    if (ping.protocol_version !== BROKER_PROTOCOL_VERSION) {
-      await client.close();
-      throw new Error("incompatible Sense broker protocol");
+    // A broker that is shutting down still answers its listener for a few
+    // milliseconds, so the first connection of a session gets the same bounded
+    // recover-and-retry the warm request path already has.
+    const attempts = options.recover ? CONNECT_ATTEMPTS : 1;
+    let lastError: Error = new Error("Sense broker is unreachable");
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (attempt > 0) {
+        client.socket?.destroy();
+        client.socket = undefined;
+        await options.recover?.();
+      }
+      let ping: { protocol_version?: number };
+      try {
+        ping = (await client.requestOnce(
+          "ping",
+          undefined,
+          Math.min(client.requestTimeoutMs, BROKER_HANDSHAKE_TIMEOUT_MS),
+        )) as { protocol_version?: number };
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        continue;
+      }
+      if (ping.protocol_version !== BROKER_PROTOCOL_VERSION) {
+        await client.close();
+        throw new Error("incompatible Sense broker protocol");
+      }
+      return client;
     }
-    return client;
+    await client.close();
+    throw lastError;
   }
 
   async getContext(request: ContextRequest = {}): Promise<ContextResult> {
@@ -548,7 +916,18 @@ export class BrokerClient implements ContextProvider {
     this.socket = undefined;
     if (!socket || socket.destroyed) return;
     await new Promise<void>((resolve) => {
-      socket.once("close", resolve);
+      // A peer that accepted the connection and then stopped answering never
+      // sends the FIN `end()` waits for; without this bound, closing a wedged
+      // broker's socket would wedge the adapter too.
+      const timer = setTimeout(() => {
+        socket.destroy();
+        resolve();
+      }, CLOSE_DRAIN_TIMEOUT_MS);
+      timer.unref?.();
+      socket.once("close", () => {
+        clearTimeout(timer);
+        resolve();
+      });
       socket.end();
     });
   }
@@ -573,7 +952,11 @@ export class BrokerClient implements ContextProvider {
     }
   }
 
-  private async requestOnce(method: BrokerRequest["method"], params: unknown): Promise<unknown> {
+  private async requestOnce(
+    method: BrokerRequest["method"],
+    params: unknown,
+    timeoutMs = this.requestTimeoutMs,
+  ): Promise<unknown> {
     await this.ensureConnected();
     const socket = this.socket;
     if (!socket || socket.destroyed) throw new Error("Sense broker is disconnected");
@@ -582,7 +965,7 @@ export class BrokerClient implements ContextProvider {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new BrokerRequestTimeoutError(`Sense broker request timed out: ${method}`));
-      }, this.requestTimeoutMs);
+      }, timeoutMs);
       timer.unref?.();
       this.pending.set(id, { resolve, reject, timer });
       socket.write(`${JSON.stringify({ id, method, params } satisfies BrokerRequest)}\n`, (error) => {
@@ -603,12 +986,19 @@ export class BrokerClient implements ContextProvider {
 
     this.connecting = new Promise<void>((resolve, reject) => {
       const socket = createConnection(this.socketPath);
+      const timer = setTimeout(() => {
+        socket.destroy();
+        reject(new Error("Sense broker connection timed out"));
+      }, BROKER_CONNECT_TIMEOUT_MS);
+      timer.unref?.();
       const onError = (error: Error) => {
+        clearTimeout(timer);
         socket.destroy();
         reject(error);
       };
       socket.once("error", onError);
       socket.once("connect", () => {
+        clearTimeout(timer);
         socket.off("error", onError);
         this.attach(socket);
         resolve();
@@ -636,17 +1026,13 @@ export class BrokerClient implements ContextProvider {
   }
 
   private receive(chunk: string): void {
-    this.buffer += chunk;
-    if (Buffer.byteLength(this.buffer) > MAX_MESSAGE_BYTES) {
+    const framed = readFramedMessages(this.buffer + chunk);
+    this.buffer = framed.rest;
+    if (framed.oversized) {
       this.socket?.destroy(new Error("broker response too large"));
       return;
     }
-    for (;;) {
-      const newline = this.buffer.indexOf("\n");
-      if (newline < 0) break;
-      const line = this.buffer.slice(0, newline);
-      this.buffer = this.buffer.slice(newline + 1);
-      if (!line.trim()) continue;
+    for (const line of framed.lines) {
       let response: BrokerResponse;
       try {
         response = JSON.parse(line) as BrokerResponse;
@@ -677,7 +1063,11 @@ export function defaultBrokerSocketPath(): string {
   return process.env.SENSE_BROKER_SOCKET || path.join(os.tmpdir(), `sense-mcp-${uid}`, "broker-v1.sock");
 }
 
-async function probeBroker(socketPath: string, timeoutMs: number): Promise<boolean> {
+/** True only when a broker on this protocol answered a ping and stayed healthy. */
+export async function probeBrokerSocket(
+  socketPath: string,
+  timeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
+): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = createConnection(socketPath);
     const id = randomUUID();
@@ -694,17 +1084,25 @@ async function probeBroker(socketPath: string, timeoutMs: number): Promise<boole
     timer.unref?.();
     socket.setEncoding("utf8");
     socket.once("error", () => finish(false));
+    // A broker that drops the connection instead of answering is not healthy,
+    // and waiting out the full timeout for it delays every election.
+    socket.once("close", () => finish(false));
     socket.once("connect", () => {
       socket.write(`${JSON.stringify({ id, method: "ping" })}\n`);
     });
     socket.on("data", (chunk: string) => {
       buffer += chunk;
-      if (Buffer.byteLength(buffer) > MAX_MESSAGE_BYTES) {
+      const newline = buffer.indexOf("\n");
+      // The limit bounds one message, so only what is still accumulating
+      // towards the first reply is measured against it.
+      if (newline < 0) {
+        if (Buffer.byteLength(buffer) > MAX_MESSAGE_BYTES) finish(false);
+        return;
+      }
+      if (Buffer.byteLength(buffer.slice(0, newline)) > MAX_MESSAGE_BYTES) {
         finish(false);
         return;
       }
-      const newline = buffer.indexOf("\n");
-      if (newline < 0) return;
       try {
         const response = JSON.parse(buffer.slice(0, newline)) as BrokerResponse;
         const result = response.result as { protocol_version?: number } | undefined;
@@ -720,6 +1118,54 @@ async function probeBroker(socketPath: string, timeoutMs: number): Promise<boole
   });
 }
 
+export interface BrokerResetResult {
+  socketPath: string;
+  reachable: boolean;
+  removed: string[];
+  failed: Array<{ path: string; reason: string }>;
+}
+
+async function preservedSocketPaths(socketPath: string): Promise<string[]> {
+  const prefix = `${path.basename(socketPath)}.preserved-`;
+  const names = await readdir(path.dirname(socketPath)).catch(() => []);
+  return names
+    .filter((name) => name.startsWith(prefix))
+    .map((name) => path.join(path.dirname(socketPath), name));
+}
+
+/**
+ * Clear the runtime files of a broker that no longer answers, so an election
+ * wedged by a stale record can be recovered without guessing at filenames.
+ */
+export async function resetBrokerRuntime(
+  socketPath = defaultBrokerSocketPath(),
+): Promise<BrokerResetResult> {
+  const result: BrokerResetResult = { socketPath, reachable: false, removed: [], failed: [] };
+  if (await probeBrokerSocket(socketPath, 500)) {
+    result.reachable = true;
+    return result;
+  }
+  const targets = [
+    socketPath,
+    brokerOwnerPath(socketPath),
+    `${socketPath}.lock`,
+    ...(await preservedSocketPaths(socketPath)),
+  ];
+  for (const target of targets) {
+    try {
+      await unlink(target);
+      result.removed.push(target);
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") continue;
+      result.failed.push({
+        path: target,
+        reason: error instanceof Error ? error.message : "could not be removed",
+      });
+    }
+  }
+  return result;
+}
+
 async function staleLock(lockPath: string, staleMs: number): Promise<boolean> {
   try {
     return Date.now() - (await stat(lockPath)).mtimeMs > staleMs;
@@ -728,10 +1174,18 @@ async function staleLock(lockPath: string, staleMs: number): Promise<boolean> {
   }
 }
 
-async function ensureBroker(options: Required<Pick<ConnectSenseBrokerOptions, "socketPath" | "startupTimeoutMs" | "lockStaleMs">> & {
+type ElectBrokerOptions = Required<
+  Pick<ConnectSenseBrokerOptions, "socketPath" | "startupTimeoutMs" | "lockStaleMs">
+> & {
   startBroker: (socketPath: string) => Promise<void>;
-}): Promise<void> {
-  if (await probeBroker(options.socketPath, 250)) return;
+};
+
+async function ensureBroker(options: ElectBrokerOptions): Promise<void> {
+  return withEventLoopKeepAlive(() => electBroker(options));
+}
+
+async function electBroker(options: ElectBrokerOptions): Promise<void> {
+  if (await probeBrokerSocket(options.socketPath, 250)) return;
   const directory = path.dirname(options.socketPath);
   await ensurePrivateDirectory(directory);
   const lockPath = `${options.socketPath}.lock`;
@@ -745,10 +1199,10 @@ async function ensureBroker(options: Required<Pick<ConnectSenseBrokerOptions, "s
         handle,
         `${JSON.stringify({ pid: process.pid, created_at: new Date().toISOString() })}\n`,
       );
-      if (await probeBroker(options.socketPath, 250)) return;
+      if (await probeBrokerSocket(options.socketPath, 250)) return;
       await options.startBroker(options.socketPath);
       while (Date.now() < deadline) {
-        if (await probeBroker(options.socketPath, 250)) return;
+        if (await probeBrokerSocket(options.socketPath, 250)) return;
         await sleep(20);
       }
     } catch (error) {
@@ -762,9 +1216,13 @@ async function ensureBroker(options: Required<Pick<ConnectSenseBrokerOptions, "s
       if (handle) await unlink(lockPath).catch(() => undefined);
     }
     await sleep(20);
-    if (await probeBroker(options.socketPath, 250)) return;
+    if (await probeBrokerSocket(options.socketPath, 250)) return;
   }
-  throw new Error(`Sense broker did not become ready within ${options.startupTimeoutMs}ms`);
+  // The elected broker runs detached with no stdio, so whatever it refused to
+  // do is invisible here; this is the only message a user sees.
+  throw new Error(
+    `Sense broker did not become ready within ${options.startupTimeoutMs}ms. ${BROKER_WEDGE_ESCAPE_HATCH}`,
+  );
 }
 
 /** Connect to the shared broker, safely electing/spawning one leader when needed. */

@@ -12,6 +12,8 @@ permissions:
 jobs:
   test:
     name: Node ${{ matrix.node }}
+    # macOS only: the package declares "os": ["darwin"], every sensor shells out
+    # to a macOS binary, and the 0700/0600 private-storage guarantees are POSIX.
     runs-on: macos-latest
     strategy:
       fail-fast: false
@@ -19,11 +21,15 @@ jobs:
         node: [22, 24]
 
     steps:
+      # Actions are pinned to a commit SHA, not a tag: a tag is mutable, and a
+      # compromised or retargeted tag would run arbitrary code with this
+      # workflow's token. The trailing comment records the human-readable
+      # version each SHA corresponds to.
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -34,5 +40,34 @@ jobs:
       - name: Check
         run: npm run check
 
+      # The only end-to-end exercise of the published binary, and the only guard
+      # on the invariant that stdout carries the MCP transport and nothing else:
+      # a stray console.log in the server would corrupt the JSON-RPC stream and
+      # every unit test would still pass. `smoke:ci` gives the run its own short
+      # broker socket and its own policy, consent, ledger and snapshot paths, so
+      # it cannot reach a developer's real broker or leave state behind.
+      - name: Smoke the published binary
+        run: npm run smoke:ci
+
       - name: Verify published package
         run: npm run check:package
+
+  dependency-review:
+    name: Dependency review
+    # Pull requests only: the action diffs the PR's dependency manifest against
+    # the base branch, so there is nothing for it to compare on a push.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      # No npm install here: the action reads the dependency graph over the API.
+      # That matters because "os": ["darwin"] makes `npm ci` fail on Linux.
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: moderate

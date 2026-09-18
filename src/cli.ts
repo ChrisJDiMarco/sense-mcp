@@ -410,6 +410,7 @@ function usage(): string {
     "  consent [list|revoke <receipt-id|all>]",
     "  settings [--open] [--port <number>] [--lan] [--lan-port <number>]",
     "  panel [--open] [--port <number>] [--lan] [--lan-port <number>]",
+    "  broker reset",
     "  enable <calendar|location|camera|screen|window|full-screen|mic|raw-titles|workspace> [value]",
     "  disable <calendar|location|camera|screen|window|full-screen|mic|raw-titles|workspace>",
   ].join("\n");
@@ -440,6 +441,40 @@ async function updateCodexConfig(key: string, value: string | null): Promise<voi
   const configPath = process.env.SENSE_CODEX_CONFIG || DEFAULT_CODEX_CONFIG;
   const current = await readFile(configPath, "utf8");
   await writeFile(configPath, setSenseEnvInToml(current, key, value));
+}
+
+function brokerUsage(): string {
+  return ["sense-mcp broker <command>", "", "Commands:", "  reset"].join("\n");
+}
+
+async function runBroker(subcommand: string | undefined): Promise<number> {
+  if (subcommand !== "reset") {
+    console.error(
+      `${subcommand ? `Unknown broker command: ${subcommand}` : "Missing broker command."}\n\n${brokerUsage()}`,
+    );
+    return 1;
+  }
+
+  const { resetBrokerRuntime } = await import("./broker.js");
+  const result = await resetBrokerRuntime();
+  console.log(`Sense broker socket: ${result.socketPath}`);
+
+  if (result.reachable) {
+    console.log("A healthy Sense broker is answering there; nothing was removed.");
+    console.log("Quit the MCP clients using Sense; the broker exits after its idle grace period.");
+    return 0;
+  }
+  for (const failure of result.failed) {
+    console.error(`Could not remove ${failure.path}: ${failure.reason}`);
+  }
+  if (result.failed.length > 0) return 1;
+  if (result.removed.length === 0) {
+    console.log("No broker runtime files to remove.");
+  } else {
+    for (const removed of result.removed) console.log(`Removed ${removed}`);
+  }
+  console.log("Sense will elect a new broker the next time an MCP client starts.");
+  return 0;
 }
 
 async function runInit(argv: string[]): Promise<number> {
@@ -485,6 +520,10 @@ export async function runCli(argv: string[]): Promise<number> {
 
   if (command === "init") {
     return runInit(argv.slice(1));
+  }
+
+  if (command === "broker") {
+    return runBroker(capability);
   }
 
   if (command === "status" || command === "permissions") {

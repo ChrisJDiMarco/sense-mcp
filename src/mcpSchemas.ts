@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_CONTEXT_MAX_TOKENS, MIN_CONTEXT_MAX_TOKENS } from "./contextOutput.js";
 
 export const domainSchema = z.enum(["screen", "user", "environment", "schedule"]);
 export const contextProjectionSchema = z.enum(["compact", "brief", "focused", "debug", "diff"]);
@@ -9,8 +10,8 @@ const contextControls = {
   max_tokens: z
     .number()
     .int()
-    .min(96)
-    .max(4_096)
+    .min(MIN_CONTEXT_MAX_TOKENS)
+    .max(MAX_CONTEXT_MAX_TOKENS)
     .optional()
     .describe("Hard budget for the complete structured context payload."),
   refresh: contextRefreshSchema.optional().describe("Whether the provider may refresh stale domains."),
@@ -32,8 +33,8 @@ export const relevantContextInputSchema = z.object({
   max_tokens: z
     .number()
     .int()
-    .min(160)
-    .max(4_096)
+    .min(MIN_CONTEXT_MAX_TOKENS)
+    .max(MAX_CONTEXT_MAX_TOKENS)
     .optional()
     .describe("Hard budget for the complete router structuredContent payload."),
 });
@@ -89,7 +90,7 @@ export const machineErrorSchema = z.object({
   message: z.string(),
   retryable: z.boolean(),
   fix_hint: z.string().optional(),
-  details: z.record(z.unknown()).optional(),
+  details: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const diagnosticSchema = z.object({
@@ -115,15 +116,29 @@ export const contextBudgetSchema = z.object({
   truncated: z.boolean(),
 });
 
+/**
+ * What a response left out and what to do about it. It rides on `ok: true`
+ * beside `context_satisfied: false`: a partial answer plus an explicit account
+ * of the gap, never an error. `suggested_max_tokens` appears only when that
+ * budget was measured to return the complete response, and it is always larger
+ * than the budget the caller sent, so a client can retry on it blindly.
+ */
+export const contextOmittedSchema = z.object({
+  domains: z.array(domainSchema),
+  reason: z.string(),
+  suggested_max_tokens: z.number().int().optional(),
+});
+
 export const contextToolOutputSchema = z.object({
   ok: z.boolean(),
   context_satisfied: z.boolean(),
   projection: contextProjectionSchema.optional(),
   generated_at: z.string().optional(),
   budget: contextBudgetSchema.optional(),
-  context: z.record(z.unknown()).optional(),
+  context: z.record(z.string(), z.unknown()).optional(),
   health: providerHealthSchema.optional(),
   refreshed_domains: z.array(domainSchema).optional(),
+  context_omitted: contextOmittedSchema.optional(),
   error: machineErrorSchema.optional(),
 });
 
@@ -158,12 +173,12 @@ export const relevantContextOutputSchema = z.object({
   guidance: z.array(z.string()).optional(),
   fallbacks: z.array(z.string()).optional(),
   privacy_notes: z.array(z.string()).optional(),
-  context: z.record(z.unknown()).optional(),
+  context: z.record(z.string(), z.unknown()).optional(),
   context_budget: contextBudgetSchema.optional(),
   output_budget: contextBudgetSchema.optional(),
   health: providerHealthSchema.optional(),
   refreshed_domains: z.array(domainSchema).optional(),
-  context_omitted: z.string().optional(),
+  context_omitted: contextOmittedSchema.optional(),
   error: machineErrorSchema.optional(),
 });
 
