@@ -1,10 +1,17 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "ignorePatterns": ["dist", "coverage", "node_modules", "apps"],
+  "ignorePatterns": [
+    "dist",
+    "coverage",
+    "node_modules",
+    "apps"
+  ],
   "rules": {},
   "overrides": [
     {
-      "files": ["src/sensors/**/*.ts"],
+      "files": [
+        "src/sensors/**/*.ts"
+      ],
       "rules": {
         "no-console": "error",
         "no-restricted-globals": [
@@ -64,12 +71,17 @@
               },
               {
                 "name": "node:fs/promises",
-                "importNames": ["writeFile", "appendFile", "open"],
+                "importNames": [
+                  "writeFile",
+                  "appendFile",
+                  "open"
+                ],
                 "message": "Sensors must not write raw sensor data to persistent storage (CONTRIBUTING.md, Sensor Contract rule 3). Persist through src/privateFiles.ts instead."
               }
             ]
           }
-        ]
+        ],
+        "no-control-regex": "off"
       }
     }
   ]

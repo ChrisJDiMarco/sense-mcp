@@ -108,6 +108,9 @@ function run(argv) {
 
 function safeAppLabel(value: string): string {
   return value
+    // Matching control characters is the point: this app name came from the
+    // window server and is about to become part of a filename, so C0 and DEL
+    // are stripped before anything else. (no-control-regex is off for sensors.)
     .replace(/[\u0000-\u001f\u007f:]/g, " ")
     .replace(/[^A-Za-z0-9._ -]/g, "")
     .replace(/\s+/g, " ")

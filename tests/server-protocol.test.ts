@@ -1123,7 +1123,11 @@ describe("Sense over a real captured frame", () => {
     // The fuzz has to have actually exercised the partial path, or it proves
     // nothing: a sweep that never left the satisfied case would report zero too.
     expect(suggestionsChecked).toBeGreaterThan(0);
-  });
+    // Thousands of real tool calls, each re-projecting a full frame. It runs in
+    // a few seconds on a developer laptop and ~12s on a CI runner, so it needs
+    // more than the 5s default. Narrowing the sweep to fit would trade away the
+    // coverage this test exists for.
+  }, 60_000);
 
   test("the router degrades one rung at a time instead of collapsing", async () => {
     // Each rung of routerCandidates, pinned by searching the accepted budget

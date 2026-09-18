@@ -2,6 +2,14 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    /**
+     * CI runners are several times slower than a developer laptop, and this
+     * suite spawns real broker processes and sweeps thousands of tool calls.
+     * The 5s default made a passing-locally suite fail on CI for timing alone;
+     * individual heavy tests still set their own larger budget.
+     */
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary"],
