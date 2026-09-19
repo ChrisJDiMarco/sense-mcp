@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { StateStore } from "../src/state.js";
 import { buildFrame } from "../src/frame.js";
-import type { Observation } from "../src/types.js";
+import { deriveSituation } from "../src/situation.js";
+import type { ContextFrame, Observation } from "../src/types.js";
 
 const obs = (over: Partial<Observation> = {}): Observation => ({
   sensor: "s1",
@@ -125,5 +126,42 @@ describe("buildFrame", () => {
     expect(frame.situation?.evidence).toContain("branch main");
     expect(frame.situation?.recent_changes.join(" ")).toContain("Working in sense-mcp");
     expect(frame.situation?.recent_changes.join(" ")).not.toContain("active_window_title");
+  });
+});
+
+describe("situation summary phrasing", () => {
+  const frameWith = (user: Record<string, string | number | boolean>): ContextFrame => ({
+    spec: "context-frame/0.2",
+    generated_at: new Date(1000).toISOString(),
+    staleness_ms: 0,
+    privacy: { tier: 1, capabilities: {} } as ContextFrame["privacy"],
+    assistive_posture: "available",
+    user,
+  });
+
+  // Regression: presence is emitted as its own word, and the work phrase used a
+  // bare "active locally" fallback, so a frame carrying only presence rendered
+  // "User appears active active locally." — and "User appears idle active
+  // locally." for a contradictory presence. Observed live on a real broker.
+  test("does not repeat or contradict the presence word when presence is the only signal", () => {
+    const active = deriveSituation(frameWith({ presence: "active" }));
+    expect(active?.summary).toBe("User appears active locally.");
+    expect(active?.summary).not.toMatch(/\b(\w+) \1\b/);
+
+    const idle = deriveSituation(frameWith({ presence: "idle" }));
+    expect(idle?.summary).toBe("User appears idle locally.");
+    expect(idle?.summary).not.toContain("active");
+  });
+
+  test("still says 'active locally' when there is no presence signal at all", () => {
+    const summary = deriveSituation(frameWith({ input_cadence: "steady" }))?.summary;
+    expect(summary).toBe("User appears active locally.");
+  });
+
+  test("no situation summary repeats a word", () => {
+    for (const user of [{ presence: "active" }, { presence: "idle" }, { presence: "away" }]) {
+      const summary = deriveSituation(frameWith(user))?.summary ?? "";
+      expect(summary, summary).not.toMatch(/\b(\w+) \1\b/);
+    }
   });
 });

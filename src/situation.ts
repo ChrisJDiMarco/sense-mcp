@@ -121,7 +121,12 @@ export function deriveSituation(
       ? `using ${app}`
       : activity
         ? `in a ${activity} activity`
-        : "active locally";
+        : // `presencePhrase` already supplies the state word, so the bare
+          // fallback would read "active active locally" when presence is the
+          // only signal — or "idle active locally", which is a contradiction.
+          presence
+          ? "locally"
+          : "active locally";
   const activityPhrase = activity && !workPhrase.includes(activity) ? `, activity looks like ${activity}` : "";
   const dirtyPhrase = dirty !== undefined ? `, with ${plural(dirty, "changed item")}` : "";
   const presencePhrase = presence ? `${presence} ` : "";
